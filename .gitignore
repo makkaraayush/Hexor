@@ -1,0 +1,78 @@
+# Environment & Secrets (NEVER COMMIT)
+.env
+.env.*
+backend/.env
+backend/.env.*
+!.env.example
+*.pem
+*.key
+
+# Spotify & Auth Cache
+.spotify_cache
+backend/storage/.spotify_cache
+.cache
+**/.cache
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Node / Frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+ui/node_modules/
+ui/.pnpm-store/
+
+# Local Storage & Runtime Caches (User-specific data)
+backend/cache/
+backend/storage/*.json
+!backend/storage/.gitkeep
+backend/storage/notes/
+backend/storage/learned_skills/
+backend/skills/custom/*.py
+!backend/skills/custom/.gitkeep
+
+# 3D Models & Printer Artifacts
+models/*
+!models/.gitkeep
+
+# IDE & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Temporary Scratch Files & Logs
+scratch/
+*.tmp
+*.log
+@AutomationLog.txt
+

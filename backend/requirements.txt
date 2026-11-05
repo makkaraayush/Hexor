@@ -1,0 +1,20 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+websockets>=12.0
+pydantic>=2.7.0
+requests>=2.31.0
+httpx>=0.27.0
+beautifulsoup4>=4.12.0
+psutil>=5.9.8
+edge-tts>=6.1.12
+pyautogui>=0.9.54
+paho-mqtt>=2.1.0
+python-dotenv>=1.0.1
+sounddevice>=0.4.6
+numpy>=1.26.0
+SpeechRecognition>=3.10.0
+Pillow>=10.0.0
+spotipy>=2.24.0
+groq>=0.9.0
+google-generativeai>=0.7.0
+winsdk>=1.0.0b10; platform_system == 'Windows'
