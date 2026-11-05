@@ -60,6 +60,7 @@ export default function App() {
   const audioChunksRef = useRef([]);
   const isListeningRef = useRef(false);
   const isSpeakingRef = useRef(false);
+  const wasInConvoBeforeSpeakingRef = useRef(false);
   const userSpeakingTimeoutRef = useRef(null);
   const speechTimeoutRef = useRef(null);
   const conversationActiveUntilRef = useRef(0);
@@ -68,6 +69,11 @@ export default function App() {
   const wsRef = useRef(null);
 
   const triggerUserSpeaking = (active = true) => {
+    // If wake listener / standby is turned off, do NOT trigger user speaking state!
+    if (!isListeningRef.current) {
+      setIsUserSpeaking(false);
+      return;
+    }
     if (active) {
       if (isSpeakingRef.current) return;
       setIsUserSpeaking(true);
@@ -144,6 +150,7 @@ export default function App() {
     const audio = audioRef.current;
     
     const onPlay = () => {
+      wasInConvoBeforeSpeakingRef.current = isListeningRef.current && (conversationActiveUntilRef.current > Date.now());
       setIsSpeaking(true);
       isSpeakingRef.current = true;
       setIsHexorSpeaking(true);
@@ -151,12 +158,19 @@ export default function App() {
     };
 
     const onEnd = () => {
+      const shouldResumeConvo = isListeningRef.current && wasInConvoBeforeSpeakingRef.current;
       resetSpeakingState();
       triggerUserSpeaking(false);
-      // The listening timeout starts ONLY AFTER Hexor finishes speaking!
-      conversationActiveUntilRef.current = Date.now() + 25000;
-      setConversationMode(true);
-      setConvoSecondsLeft(25);
+      if (shouldResumeConvo) {
+        // The listening timeout starts ONLY AFTER Hexor finishes speaking, and only if conversation was active!
+        conversationActiveUntilRef.current = Date.now() + 25000;
+        setConversationMode(true);
+        setConvoSecondsLeft(25);
+      } else {
+        conversationActiveUntilRef.current = 0;
+        setConversationMode(false);
+        setConvoSecondsLeft(0);
+      }
     };
 
     const onError = () => {
@@ -278,10 +292,12 @@ export default function App() {
           } else if (data.type === "alarm_stopped") {
             setRingingAlarm(null);
           } else if (data.type === "user_speaking") {
-            triggerUserSpeaking(!!data.speaking);
-            if (data.speaking) {
-              conversationActiveUntilRef.current = Date.now() + 25000;
-              setConversationMode(true);
+            if (isListeningRef.current) {
+              triggerUserSpeaking(!!data.speaking);
+              // Only extend conversation timeout if already actively in conversation!
+              if (data.speaking && (conversationActiveUntilRef.current > Date.now())) {
+                conversationActiveUntilRef.current = Date.now() + 25000;
+              }
             }
           } else if (data.type === "system_shutdown") {
             setIsSystemShuttingDown(true);
@@ -290,9 +306,11 @@ export default function App() {
               window.location.href = "about:blank";
             }, 1000);
           } else if (data.type === "wake_detected") {
-            playWakeChime();
-            conversationActiveUntilRef.current = Date.now() + 25000;
-            setConversationMode(true);
+            if (isListeningRef.current) {
+              playWakeChime();
+              conversationActiveUntilRef.current = Date.now() + 25000;
+              setConversationMode(true);
+            }
           } else if (data.type === "chat_response" || data.type === "approval_response") {
             handleAssistantResponse(data.payload);
           }
@@ -352,7 +370,7 @@ export default function App() {
       recognition.onend = safeRestart;
 
       recognition.onspeechstart = () => {
-        if (!isSpeakingRef.current) {
+        if (isListeningRef.current && !isSpeakingRef.current) {
           triggerUserSpeaking(true);
         }
       };
@@ -373,6 +391,7 @@ export default function App() {
       };
 
       recognition.onresult = (event) => {
+        if (!isListeningRef.current) return;
         let currentInterim = '';
         let finalChunk = '';
 
@@ -514,16 +533,25 @@ export default function App() {
     };
   }, []);
 
-  const toggleListening = () => {
+  const toggleListening = async () => {
     if (isListening) {
       isListeningRef.current = false;
       setIsListening(false);
+      setIsUserSpeaking(false);
       setConversationMode(false);
       conversationActiveUntilRef.current = 0;
+      setConvoSecondsLeft(0);
       setInterimTranscript('');
       accumulatedTranscriptRef.current = '';
       try {
         if (recognitionRef.current) recognitionRef.current.stop();
+      } catch (e) {}
+      try {
+        await fetch('/api/voice/wake_listener', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: false })
+        });
       } catch (e) {}
     } else {
       isListeningRef.current = true;
@@ -532,6 +560,13 @@ export default function App() {
       setInterimTranscript('');
       try {
         if (recognitionRef.current) recognitionRef.current.start();
+      } catch (e) {}
+      try {
+        await fetch('/api/voice/wake_listener', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: true })
+        });
       } catch (e) {}
     }
   };

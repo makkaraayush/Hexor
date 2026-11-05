@@ -276,6 +276,15 @@ async def cancel_alarm_by_id(alarm_id: str):
         return await skill.execute(action="cancel_alarm", alarm_id=alarm_id)
     return {"success": False, "message": "Alarm skill not active."}
 
+@app.post("/api/voice/wake_listener")
+async def toggle_wake_listener(req: Dict[str, Any]):
+    global wake_listener
+    enabled = req.get("enabled", True)
+    if wake_listener:
+        wake_listener.set_enabled(enabled)
+        return {"success": True, "enabled": enabled}
+    return {"success": False, "message": "Wake listener not initialized."}
+
 @app.post("/api/system/shutdown")
 async def shutdown_system():
     async def do_exit():
@@ -285,42 +294,50 @@ async def shutdown_system():
         except Exception:
             pass
 
-        await asyncio.sleep(0.4)
+        await asyncio.sleep(0.3)
         try:
             import ctypes
             import psutil
+            import subprocess
 
-            user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
+            user32 = ctypes.windll.user32
 
-            # 2. Close attached console window directly
+            # Close and hide attached console window directly
             try:
                 hwnd = kernel32.GetConsoleWindow()
                 if hwnd:
+                    user32.ShowWindow(hwnd, 0)  # SW_HIDE
                     user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
             except Exception:
                 pass
 
-            # 3. Terminate Hexor child processes (excluding external user apps)
-            curr = psutil.Process(os.getpid())
+            curr_pid = os.getpid()
+            curr = psutil.Process(curr_pid)
+            parent = curr.parent()
+
+            pids_to_kill = [curr_pid]
+            # If parent is python (e.g. uvicorn reloader supervisor), include it for termination
+            if parent and "python" in parent.name().lower():
+                try:
+                    cmdline = " ".join(parent.cmdline() if hasattr(parent, 'cmdline') else []).lower()
+                    if not any(safe in cmdline for safe in ["antigravity", "code", "vscode", "cursor", "pycharm", "idea"]):
+                        pids_to_kill.append(parent.pid)
+                except Exception:
+                    pass
+
+            # Terminate Hexor child processes (excluding external user apps)
             for child in curr.children(recursive=True):
                 try:
                     cname = child.name().lower()
-                    if cname not in ["spotify.exe", "chrome.exe", "msedge.exe", "bambu-studio.exe", "code.exe"]:
+                    if cname not in ["spotify.exe", "chrome.exe", "msedge.exe", "bambu-studio.exe"]:
                         child.kill()
                 except Exception:
                     pass
 
-            # 4. If launched via standalone cmd.exe, close only that immediate cmd parent
-            # STRICTLY NEVER touch powershell, pwsh, windowsterminal, antigravity, or IDEs!
-            parent = curr.parent()
-            if parent:
+            for pid in pids_to_kill:
                 try:
-                    pname = parent.name().lower()
-                    if pname in ["cmd.exe", "conhost.exe"]:
-                        cmdline = " ".join(parent.cmdline() if hasattr(parent, 'cmdline') else []).lower()
-                        if not any(safe in cmdline for safe in ["antigravity", "code", "vscode", "cursor", "pycharm", "idea"]):
-                            parent.kill()
+                    subprocess.Popen(f"taskkill /F /PID {pid} /T", shell=True)
                 except Exception:
                     pass
 

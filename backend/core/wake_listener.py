@@ -170,8 +170,8 @@ class WakeListener:
                                 record_start = time.time()
                                 was_convo_at_start = (time.time() < self.conversation_until)
                                 audio_buffer = []
-                                # Broadcast to HUD that user is actively speaking
-                                if self.broadcast_callback and self.loop:
+                                # Only broadcast user_speaking to HUD if actively in conversation mode
+                                if was_convo_at_start and self.broadcast_callback and self.loop:
                                     asyncio.run_coroutine_threadsafe(
                                         self.broadcast_callback({"type": "user_speaking", "speaking": True}),
                                         self.loop
@@ -186,7 +186,7 @@ class WakeListener:
                             if silence_start is None:
                                 silence_start = time.time()
                             elif (time.time() - silence_start) >= self.silence_limit:
-                                if self.broadcast_callback and self.loop:
+                                if was_convo_at_start and self.broadcast_callback and self.loop:
                                     asyncio.run_coroutine_threadsafe(
                                         self.broadcast_callback({"type": "user_speaking", "speaking": False}),
                                         self.loop
@@ -194,7 +194,7 @@ class WakeListener:
                                 break
 
                         if is_speaking and record_start and (time.time() - record_start) >= self.max_record_seconds:
-                            if self.broadcast_callback and self.loop:
+                            if was_convo_at_start and self.broadcast_callback and self.loop:
                                 asyncio.run_coroutine_threadsafe(
                                     self.broadcast_callback({"type": "user_speaking", "speaking": False}),
                                     self.loop
