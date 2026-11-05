@@ -15,7 +15,8 @@ export default function TerminalCommandDeck({
   isProcessing,
   isHexorSpeaking = false,
   conversationMode = false,
-  convoSecondsLeft = 0
+  convoSecondsLeft = 0,
+  isUserSpeaking = false
 }) {
   const [inputText, setInputText] = useState('');
   const chatScrollContainerRef = useRef(null);
@@ -70,8 +71,10 @@ export default function TerminalCommandDeck({
             className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border transition-all ${
               isHexorSpeaking
                 ? 'bg-amber-950/60 border-amber-400/80 text-amber-200'
+                : isUserSpeaking
+                ? 'bg-emerald-500/40 border-emerald-300 text-emerald-100 shadow-[0_0_16px_rgba(52,211,153,0.7)] animate-pulse'
                 : conversationMode
-                ? 'bg-emerald-500/30 border-emerald-400 text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.5)] animate-pulse'
+                ? 'bg-emerald-500/30 border-emerald-400 text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
                 : isListening
                 ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-[0_0_8px_rgba(0,240,255,0.3)]'
                 : 'bg-black/40 border-cyan-500/30 text-cyan-400 hover:text-cyan-200'
@@ -79,6 +82,8 @@ export default function TerminalCommandDeck({
             title={
               isHexorSpeaking
                 ? "Microphone muted while Hexor speaks"
+                : isUserSpeaking
+                ? "Hexor is listening to your voice..."
                 : conversationMode
                 ? `Hands-free conversation active (${convoSecondsLeft}s remaining)`
                 : isListening
@@ -88,6 +93,11 @@ export default function TerminalCommandDeck({
           >
             {isHexorSpeaking ? (
               <Volume2 className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
+            ) : isUserSpeaking ? (
+              <span className="relative flex h-2.5 w-2.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-300 opacity-90"></span>
+                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400"></span>
+              </span>
             ) : conversationMode ? (
               <span className="relative flex h-2.5 w-2.5">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
@@ -104,6 +114,8 @@ export default function TerminalCommandDeck({
             <span className="font-orbitron text-[11px] font-semibold">
               {isHexorSpeaking
                 ? "HEXOR SPEAKING"
+                : isUserSpeaking
+                ? "LISTENING..."
                 : conversationMode
                 ? `CONVERSATION (${convoSecondsLeft}s)`
                 : isListening

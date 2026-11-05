@@ -93,6 +93,8 @@ class WakeListener:
 
     def notify_hexor_speaking(self, duration_seconds: float):
         self.cooldown_until = time.time() + duration_seconds + 0.2
+        # Ensure the 25-second conversation timeout only starts AFTER Hexor finishes speaking!
+        self.conversation_until = self.cooldown_until + 25.0
 
     def _get_best_input_device(self) -> Optional[int]:
         try:
@@ -168,6 +170,12 @@ class WakeListener:
                                 record_start = time.time()
                                 was_convo_at_start = (time.time() < self.conversation_until)
                                 audio_buffer = []
+                                # Broadcast to HUD that user is actively speaking
+                                if self.broadcast_callback and self.loop:
+                                    asyncio.run_coroutine_threadsafe(
+                                        self.broadcast_callback({"type": "user_speaking", "speaking": True}),
+                                        self.loop
+                                    )
                             # Dynamically hold open conversation timeout while user is actively speaking
                             if was_convo_at_start or time.time() < self.conversation_until:
                                 self.conversation_until = time.time() + 25.0
@@ -178,9 +186,19 @@ class WakeListener:
                             if silence_start is None:
                                 silence_start = time.time()
                             elif (time.time() - silence_start) >= self.silence_limit:
+                                if self.broadcast_callback and self.loop:
+                                    asyncio.run_coroutine_threadsafe(
+                                        self.broadcast_callback({"type": "user_speaking", "speaking": False}),
+                                        self.loop
+                                    )
                                 break
 
                         if is_speaking and record_start and (time.time() - record_start) >= self.max_record_seconds:
+                            if self.broadcast_callback and self.loop:
+                                asyncio.run_coroutine_threadsafe(
+                                    self.broadcast_callback({"type": "user_speaking", "speaking": False}),
+                                    self.loop
+                                )
                             break
 
                     if audio_buffer and is_speaking:
@@ -188,6 +206,12 @@ class WakeListener:
                         # Process if at least 0.3s of audio recorded
                         if len(raw_bytes) >= int(self.sample_rate * 2 * 0.3):
                             self._process_speech(raw_bytes, was_convo_at_start)
+                        else:
+                            if self.broadcast_callback and self.loop:
+                                asyncio.run_coroutine_threadsafe(
+                                    self.broadcast_callback({"type": "user_speaking", "speaking": False}),
+                                    self.loop
+                                )
 
             except Exception as e:
                 time.sleep(0.5)
@@ -275,6 +299,7 @@ class WakeListener:
             return
 
         if self.broadcast_callback:
+            await self.broadcast_callback({"type": "user_speaking", "speaking": False})
             await self.broadcast_callback({
                 "type": "wake_detected",
                 "transcript": full_transcript,
@@ -315,6 +340,8 @@ class WakeListener:
     async def _dispatch_command(self, query: str):
         if not self.brain:
             return
+        if self.broadcast_callback:
+            await self.broadcast_callback({"type": "user_speaking", "speaking": False})
         res = await self.brain.process_user_input(query, voice_enabled=True)
         dur = self._estimate_duration(res.get("response_text", ""))
         self.notify_hexor_speaking(dur)

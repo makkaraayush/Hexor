@@ -255,32 +255,43 @@ async def transcribe_audio_endpoint(file: UploadFile = File(...)):
         return {"success": True, "transcript": text}
     return {"success": False, "transcript": ""}
 
+@app.post("/api/alarms/stop")
+async def stop_ringing_alarm():
+    skill = brain.skills.get("alarm_clock")
+    if skill:
+        return await skill.execute(action="stop_alarm")
+    return {"success": False, "message": "Alarm skill not active."}
+
+@app.get("/api/alarms")
+async def get_alarms():
+    skill = brain.skills.get("alarm_clock")
+    if skill:
+        return await skill.execute(action="list_alarms")
+    return {"success": False, "alarms": []}
+
+@app.delete("/api/alarms/{alarm_id}")
+async def cancel_alarm_by_id(alarm_id: str):
+    skill = brain.skills.get("alarm_clock")
+    if skill:
+        return await skill.execute(action="cancel_alarm", alarm_id=alarm_id)
+    return {"success": False, "message": "Alarm skill not active."}
+
 @app.post("/api/system/shutdown")
 async def shutdown_system():
     async def do_exit():
+        # 1. Inform frontend via WebSocket that system is shutting down
+        try:
+            await broadcast_hud_event({"type": "system_shutdown"})
+        except Exception:
+            pass
+
         await asyncio.sleep(0.4)
         try:
             import ctypes
-            from ctypes import wintypes
             import psutil
 
             user32 = ctypes.windll.user32
             kernel32 = ctypes.windll.kernel32
-
-            # 1. Close any console or terminal window titled "HEXOR"
-            try:
-                def enum_win(hwnd, _):
-                    length = user32.GetWindowTextLengthW(hwnd)
-                    if length > 0:
-                        buf = ctypes.create_unicode_buffer(length + 1)
-                        user32.GetWindowTextW(hwnd, buf, length + 1)
-                        if "HEXOR" in buf.value.upper():
-                            user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
-                    return True
-                WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-                user32.EnumWindows(WNDENUMPROC(enum_win), 0)
-            except Exception:
-                pass
 
             # 2. Close attached console window directly
             try:
@@ -290,7 +301,7 @@ async def shutdown_system():
             except Exception:
                 pass
 
-            # 3. Terminate Hexor process tree and parent terminal process
+            # 3. Terminate Hexor child processes (excluding external user apps)
             curr = psutil.Process(os.getpid())
             for child in curr.children(recursive=True):
                 try:
@@ -300,16 +311,16 @@ async def shutdown_system():
                 except Exception:
                     pass
 
-            # Walk parent tree and close terminal hosts
-            p = curr
-            for _ in range(6):
+            # 4. If launched via standalone cmd.exe, close only that immediate cmd parent
+            # STRICTLY NEVER touch powershell, pwsh, windowsterminal, antigravity, or IDEs!
+            parent = curr.parent()
+            if parent:
                 try:
-                    p = p.parent()
-                    if not p:
-                        break
-                    pname = p.name().lower()
-                    if any(t in pname for t in ["cmd", "powershell", "pwsh", "windowsterminal", "conhost", "wt", "openconsole"]):
-                        p.kill()
+                    pname = parent.name().lower()
+                    if pname in ["cmd.exe", "conhost.exe"]:
+                        cmdline = " ".join(parent.cmdline() if hasattr(parent, 'cmdline') else []).lower()
+                        if not any(safe in cmdline for safe in ["antigravity", "code", "vscode", "cursor", "pycharm", "idea"]):
+                            parent.kill()
                 except Exception:
                     pass
 

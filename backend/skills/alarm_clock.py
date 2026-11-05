@@ -257,32 +257,104 @@ class AlarmClockSkill(BaseSkill):
                     "data": {"alarms": active}
                 }
 
-            elif action in ["cancel_alarm", "stop_alarm"]:
-                if action == "stop_alarm" and self.ringing_alarm:
-                    self.ringing_alarm = None
-                    if self.spotify_skill:
-                        try:
-                            await self.spotify_skill.execute(action="pause")
-                        except Exception:
-                            pass
-                    return {
-                        "success": True,
-                        "message": "Alarm silenced and music paused, Sir.",
-                        "data": None,
-                        "ui_action": "alarm_stopped"
-                    }
+            elif action == "stop_alarm":
+                was_ringing = self.ringing_alarm is not None
+                self.ringing_alarm = None
+                
+                # Pause Spotify alarm music
+                if self.spotify_skill:
+                    try:
+                        await self.spotify_skill.execute(action="pause")
+                    except Exception:
+                        pass
 
-                # Cancel active alarms
-                self._save_alarms([])
+                # Broadcast dismissal to HUD immediately
                 if self.broadcast_callback:
-                    await self.broadcast_callback({"type": "alarms_updated", "alarms": []})
+                    try:
+                        await self.broadcast_callback({"type": "alarm_stopped"})
+                    except Exception:
+                        pass
 
                 return {
                     "success": True,
-                    "message": "All active alarms have been canceled, Sir.",
-                    "data": {"alarms": []},
-                    "ui_action": "alarm_cancelled"
+                    "message": "Alarm silenced and music paused, Sir." if was_ringing else "No alarm is currently ringing, Sir. Spotify playback has been paused.",
+                    "data": None,
+                    "ui_action": "alarm_stopped"
                 }
+
+            elif action == "cancel_alarm":
+                # Handle selective alarm cancellation
+                now = time.time()
+                active = [a for a in alarms if a.get("status") == "active" and a.get("timestamp", 0) > now]
+                
+                if not active:
+                    return {
+                        "success": True,
+                        "message": "You have no active alarms to cancel, Sir.",
+                        "data": {"alarms": []}
+                    }
+
+                alarm_id = kwargs.get("alarm_id", "")
+                target_time = time_str.strip().lower()
+
+                if alarm_id:
+                    # Cancel specific ID
+                    remaining = [a for a in alarms if a.get("id") != alarm_id]
+                    self._save_alarms(remaining)
+                    if self.broadcast_callback:
+                        await self.broadcast_callback({"type": "alarms_updated", "alarms": remaining})
+                    return {
+                        "success": True,
+                        "message": "The specified alarm has been canceled, Sir.",
+                        "data": {"alarms": remaining},
+                        "ui_action": "alarm_cancelled"
+                    }
+                elif target_time and any(w not in target_time for w in ["all", "everything", "every"]):
+                    # Match by time or label
+                    matched = None
+                    remaining = []
+                    for a in alarms:
+                        if not matched and (target_time in a.get("time_str", "").lower() or target_time in a.get("label", "").lower()):
+                            matched = a
+                        else:
+                            remaining.append(a)
+
+                    if matched:
+                        self._save_alarms(remaining)
+                        if self.broadcast_callback:
+                            await self.broadcast_callback({"type": "alarms_updated", "alarms": remaining})
+                        return {
+                            "success": True,
+                            "message": f"Alarm for {matched.get('time_str')} has been canceled, Sir.",
+                            "data": {"alarms": remaining},
+                            "ui_action": "alarm_cancelled"
+                        }
+
+                # If "all" or generic cancel with 1 alarm
+                if len(active) == 1 or any(w in target_time for w in ["all", "every", "both", "clear"]):
+                    self._save_alarms([])
+                    if self.broadcast_callback:
+                        await self.broadcast_callback({"type": "alarms_updated", "alarms": []})
+                    return {
+                        "success": True,
+                        "message": "All active alarms have been canceled, Sir.",
+                        "data": {"alarms": []},
+                        "ui_action": "alarm_cancelled"
+                    }
+                else:
+                    # Multiple alarms exist and user didn't say "all" - cancel the earliest upcoming one
+                    active.sort(key=lambda x: x.get("timestamp", 0))
+                    canceled_alarm = active[0]
+                    remaining = [a for a in alarms if a.get("id") != canceled_alarm.get("id")]
+                    self._save_alarms(remaining)
+                    if self.broadcast_callback:
+                        await self.broadcast_callback({"type": "alarms_updated", "alarms": remaining})
+                    return {
+                        "success": True,
+                        "message": f"Upcoming alarm for {canceled_alarm.get('time_str')} canceled. You still have {len(remaining)} other alarm(s) active, Sir.",
+                        "data": {"alarms": remaining},
+                        "ui_action": "alarm_cancelled"
+                    }
 
             return {"success": False, "message": f"Unsupported action: {action}"}
 

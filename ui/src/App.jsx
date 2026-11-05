@@ -49,6 +49,7 @@ export default function App() {
 
   // Conversational hands-free & anti-feedback state
   const [isHexorSpeaking, setIsHexorSpeaking] = useState(false);
+  const [isUserSpeaking, setIsUserSpeaking] = useState(false);
   const [conversationMode, setConversationMode] = useState(false);
   const [convoSecondsLeft, setConvoSecondsLeft] = useState(0);
   const [ringingAlarm, setRingingAlarm] = useState(null);
@@ -59,11 +60,26 @@ export default function App() {
   const audioChunksRef = useRef([]);
   const isListeningRef = useRef(false);
   const isSpeakingRef = useRef(false);
+  const userSpeakingTimeoutRef = useRef(null);
   const speechTimeoutRef = useRef(null);
   const conversationActiveUntilRef = useRef(0);
   const silenceTimerRef = useRef(null);
   const accumulatedTranscriptRef = useRef('');
   const wsRef = useRef(null);
+
+  const triggerUserSpeaking = (active = true) => {
+    if (active) {
+      if (isSpeakingRef.current) return;
+      setIsUserSpeaking(true);
+      if (userSpeakingTimeoutRef.current) clearTimeout(userSpeakingTimeoutRef.current);
+      userSpeakingTimeoutRef.current = setTimeout(() => {
+        setIsUserSpeaking(false);
+      }, 2500);
+    } else {
+      if (userSpeakingTimeoutRef.current) clearTimeout(userSpeakingTimeoutRef.current);
+      setIsUserSpeaking(false);
+    }
+  };
 
   const resetSpeakingState = () => {
     if (speechTimeoutRef.current) {
@@ -106,11 +122,18 @@ export default function App() {
   useEffect(() => {
     const timer = setInterval(() => {
       setSystemTime(new Date().toLocaleTimeString());
+      
+      // While Hexor is actively speaking, do NOT decrement the user's listening timeout!
+      if (isSpeakingRef.current) {
+        return;
+      }
+
       const left = Math.max(0, Math.ceil((conversationActiveUntilRef.current - Date.now()) / 1000));
       setConvoSecondsLeft(left);
       if (left <= 0 && conversationActiveUntilRef.current !== 0) {
         conversationActiveUntilRef.current = 0;
         setConversationMode(false);
+        setIsUserSpeaking(false);
       }
     }, 1000);
     return () => clearInterval(timer);
@@ -124,14 +147,21 @@ export default function App() {
       setIsSpeaking(true);
       isSpeakingRef.current = true;
       setIsHexorSpeaking(true);
+      triggerUserSpeaking(false);
     };
 
     const onEnd = () => {
       resetSpeakingState();
+      triggerUserSpeaking(false);
+      // The listening timeout starts ONLY AFTER Hexor finishes speaking!
+      conversationActiveUntilRef.current = Date.now() + 25000;
+      setConversationMode(true);
+      setConvoSecondsLeft(25);
     };
 
     const onError = () => {
       resetSpeakingState();
+      triggerUserSpeaking(false);
     };
 
     audio.addEventListener('play', onPlay);
@@ -247,6 +277,18 @@ export default function App() {
             }
           } else if (data.type === "alarm_stopped") {
             setRingingAlarm(null);
+          } else if (data.type === "user_speaking") {
+            triggerUserSpeaking(!!data.speaking);
+            if (data.speaking) {
+              conversationActiveUntilRef.current = Date.now() + 25000;
+              setConversationMode(true);
+            }
+          } else if (data.type === "system_shutdown") {
+            setIsSystemShuttingDown(true);
+            setTimeout(() => {
+              try { window.close(); } catch (e) {}
+              window.location.href = "about:blank";
+            }, 1000);
           } else if (data.type === "wake_detected") {
             playWakeChime();
             conversationActiveUntilRef.current = Date.now() + 25000;
@@ -309,11 +351,22 @@ export default function App() {
 
       recognition.onend = safeRestart;
 
+      recognition.onspeechstart = () => {
+        if (!isSpeakingRef.current) {
+          triggerUserSpeaking(true);
+        }
+      };
+
+      recognition.onspeechend = () => {
+        triggerUserSpeaking(false);
+      };
+
       recognition.onerror = (e) => {
         if (e.error === 'not-allowed') {
           console.warn("Microphone access denied by browser.");
           isListeningRef.current = false;
           setIsListening(false);
+          triggerUserSpeaking(false);
           return;
         }
         safeRestart();
@@ -349,6 +402,9 @@ export default function App() {
           return;
         }
 
+        // Active speech detected - switch status to listening
+        triggerUserSpeaking(true);
+
         if (finalChunk.trim()) {
           accumulatedTranscriptRef.current += ' ' + finalChunk.trim();
         }
@@ -364,6 +420,7 @@ export default function App() {
 
         if (wakeMatch) {
           playWakeChime();
+          triggerUserSpeaking(false);
           conversationActiveUntilRef.current = Date.now() + 25000;
           setConversationMode(true);
 
@@ -393,6 +450,7 @@ export default function App() {
           setConversationMode(true);
 
           if (/(?:stand\s*down|stop\s*listening|dismissed|hexor\s*stand\s*down|jarvis\s*stand\s*down|shut\s*up|stop\s*talking|exit\s*conversation)/i.test(candidateText)) {
+            triggerUserSpeaking(false);
             conversationActiveUntilRef.current = 0;
             setConversationMode(false);
             setConvoSecondsLeft(0);
@@ -408,6 +466,7 @@ export default function App() {
 
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
           silenceTimerRef.current = setTimeout(() => {
+            triggerUserSpeaking(false);
             if (isSpeakingRef.current) return;
             const fullQuery = (accumulatedTranscriptRef.current + ' ' + currentInterim).trim();
             if (fullQuery.length > 1) {
@@ -745,8 +804,10 @@ export default function App() {
       await fetch('/api/system/shutdown', { method: 'POST' });
     } catch (e) {}
     setTimeout(() => {
-      window.close();
-    }, 1500);
+      try {
+        window.close();
+      } catch (e) {}
+    }, 800);
   };
 
   return (
@@ -847,9 +908,11 @@ export default function App() {
             </div>
           </div>
           <button
-            onClick={() => {
+            onClick={async () => {
               setRingingAlarm(null);
-              sendMessage("Stop alarm");
+              try {
+                await fetch('/api/alarms/stop', { method: 'POST' });
+              } catch (e) {}
             }}
             className="px-4 py-1.5 bg-black/60 hover:bg-black/90 border border-white/50 rounded-lg text-xs font-orbitron font-bold tracking-wider uppercase text-amber-200 hover:text-white transition-all shadow-md"
           >
@@ -904,9 +967,18 @@ export default function App() {
           <h2 className="font-orbitron text-base font-bold text-cyan-400 tracking-widest uppercase mb-1">
             HEXOR OS OFFLINE
           </h2>
-          <p className="font-mono-tech text-xs text-cyan-600">
-            System core deactivated. You may now close this browser window.
+          <p className="font-mono-tech text-xs text-cyan-600 mb-4">
+            System core and terminal safely deactivated.
           </p>
+          <button
+            onClick={() => {
+              try { window.close(); } catch (e) {}
+              window.location.href = "about:blank";
+            }}
+            className="px-4 py-2 rounded-lg border border-cyan-500/40 bg-cyan-950/50 hover:bg-cyan-900/60 text-cyan-200 font-orbitron text-xs tracking-wider transition-all"
+          >
+            CLOSE TAB
+          </button>
         </div>
       )}
 
@@ -955,6 +1027,7 @@ export default function App() {
               onToggleVoice={() => setVoiceEnabled(!voiceEnabled)}
               isProcessing={isProcessing}
               isHexorSpeaking={isHexorSpeaking}
+              isUserSpeaking={isUserSpeaking}
               conversationMode={conversationMode}
               convoSecondsLeft={convoSecondsLeft}
             />
