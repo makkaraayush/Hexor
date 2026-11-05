@@ -140,6 +140,8 @@ export default function App() {
         conversationActiveUntilRef.current = 0;
         setConversationMode(false);
         setIsUserSpeaking(false);
+        // Synchronously notify backend wake listener to drop into standby
+        fetch('/api/voice/standby', { method: 'POST' }).catch(() => {});
       }
     }, 1000);
     return () => clearInterval(timer);
@@ -305,6 +307,11 @@ export default function App() {
               try { window.close(); } catch (e) {}
               window.location.href = "about:blank";
             }, 1000);
+          } else if (data.type === "standby_entered") {
+            conversationActiveUntilRef.current = 0;
+            setConversationMode(false);
+            setIsUserSpeaking(false);
+            setConvoSecondsLeft(0);
           } else if (data.type === "wake_detected") {
             if (isListeningRef.current) {
               playWakeChime();
@@ -421,9 +428,6 @@ export default function App() {
           return;
         }
 
-        // Active speech detected - switch status to listening
-        triggerUserSpeaking(true);
-
         if (finalChunk.trim()) {
           accumulatedTranscriptRef.current += ' ' + finalChunk.trim();
         }
@@ -462,8 +466,9 @@ export default function App() {
           return;
         }
 
-        // Active hands-free conversation mode
+        // Active hands-free conversation mode (ONLY show LISTENING... and process input when conversation is active)
         if (isConversationActive) {
+          triggerUserSpeaking(true);
           // Actively speaking: hold conversation mode open and refresh inactivity countdown
           conversationActiveUntilRef.current = Date.now() + 25000;
           setConversationMode(true);
@@ -475,6 +480,7 @@ export default function App() {
             setConvoSecondsLeft(0);
             accumulatedTranscriptRef.current = '';
             setInterimTranscript('');
+            fetch('/api/voice/standby', { method: 'POST' }).catch(() => {});
             handleAssistantResponse({
               response_text: "Standing by, Sir. Just call my name whenever you require assistance.",
               ui_action: "standby",
@@ -484,6 +490,7 @@ export default function App() {
           }
 
           if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          // Natural speech pause gap: 1200ms (1.2 seconds) before executing
           silenceTimerRef.current = setTimeout(() => {
             triggerUserSpeaking(false);
             if (isSpeakingRef.current) return;
@@ -495,7 +502,7 @@ export default function App() {
               accumulatedTranscriptRef.current = '';
               setInterimTranscript('');
             }
-          }, 450);
+          }, 1200);
         }
       };
 
@@ -514,16 +521,13 @@ export default function App() {
     const handleFirstGesture = async () => {
       try {
         if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {});
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => null);
+          if (stream) {
+            // Immediately stop audio tracks so browser does NOT hold the microphone open!
+            stream.getTracks().forEach(track => track.stop());
+          }
         }
       } catch (e) {}
-      if (!isListeningRef.current && recognitionRef.current) {
-        try {
-          isListeningRef.current = true;
-          setIsListening(true);
-          recognitionRef.current.start();
-        } catch (e) {}
-      }
     };
     window.addEventListener('click', handleFirstGesture, { once: true });
     window.addEventListener('keydown', handleFirstGesture, { once: true });
@@ -544,7 +548,9 @@ export default function App() {
       setInterimTranscript('');
       accumulatedTranscriptRef.current = '';
       try {
-        if (recognitionRef.current) recognitionRef.current.stop();
+        if (recognitionRef.current) {
+          recognitionRef.current.abort(); // Immediately cut mic stream in browser
+        }
       } catch (e) {}
       try {
         await fetch('/api/voice/wake_listener', {
@@ -690,11 +696,19 @@ export default function App() {
     setIsProcessing(false);
     if (!payload) return;
 
-    // Handle explicit standby from assistant
-    if (payload.ui_action === "standby") {
+    // Handle explicit standby or shutdown from assistant
+    if (payload.ui_action === "system_shutdown") {
+      setIsSystemShuttingDown(true);
+      setTimeout(() => {
+        try { window.close(); } catch (e) {}
+        window.location.href = "about:blank";
+      }, 1800);
+    } else if (payload.ui_action === "standby") {
       conversationActiveUntilRef.current = 0;
       setConversationMode(false);
       setConvoSecondsLeft(0);
+      setIsUserSpeaking(false);
+      fetch('/api/voice/standby', { method: 'POST' }).catch(() => {});
     } else if (conversationMode || conversationActiveUntilRef.current > Date.now()) {
       // Refresh hands-free conversation window so user can speak follow-ups naturally
       conversationActiveUntilRef.current = Date.now() + 25000;

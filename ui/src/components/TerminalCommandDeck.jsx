@@ -69,31 +69,39 @@ export default function TerminalCommandDeck({
           <button
             onClick={onToggleListening}
             className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg border transition-all ${
-              isHexorSpeaking
+              !isListening
+                ? 'bg-black/50 border-gray-700/50 text-gray-500 hover:text-gray-300 hover:border-gray-500'
+                : isHexorSpeaking
                 ? 'bg-amber-950/60 border-amber-400/80 text-amber-200'
-                : isUserSpeaking
+                : isProcessing
+                ? 'bg-cyan-950/70 border-cyan-400 text-cyan-300 animate-pulse'
+                : (conversationMode && isUserSpeaking)
                 ? 'bg-emerald-500/40 border-emerald-300 text-emerald-100 shadow-[0_0_16px_rgba(52,211,153,0.7)] animate-pulse'
                 : conversationMode
                 ? 'bg-emerald-500/30 border-emerald-400 text-emerald-200 shadow-[0_0_12px_rgba(16,185,129,0.5)]'
-                : isListening
-                ? 'bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-[0_0_8px_rgba(0,240,255,0.3)]'
-                : 'bg-black/40 border-cyan-500/30 text-cyan-400 hover:text-cyan-200'
+                : 'bg-cyan-500/20 border-cyan-400 text-cyan-200 shadow-[0_0_8px_rgba(0,240,255,0.3)]'
             }`}
             title={
-              isHexorSpeaking
+              !isListening
+                ? "Wake word listener is disabled. Click to turn on standby."
+                : isHexorSpeaking
                 ? "Microphone muted while Hexor speaks"
-                : isUserSpeaking
-                ? "Hexor is listening to your voice..."
+                : isProcessing
+                ? "Hexor is reasoning and preparing response..."
+                : (conversationMode && isUserSpeaking)
+                ? "Hexor is hearing your voice..."
                 : conversationMode
                 ? `Hands-free conversation active (${convoSecondsLeft}s remaining)`
-                : isListening
-                ? "Standing by for 'Hey Hexor' or 'Hexor'"
-                : "Start voice wake listener"
+                : "Standing by for 'Hey Hexor' or 'Jarvis'"
             }
           >
-            {isHexorSpeaking ? (
+            {!isListening ? (
+              <MicOff className="w-3.5 h-3.5 text-gray-400" />
+            ) : isHexorSpeaking ? (
               <Volume2 className="w-3.5 h-3.5 text-amber-400 animate-pulse" />
-            ) : isUserSpeaking ? (
+            ) : isProcessing ? (
+              <Cpu className="w-3.5 h-3.5 text-cyan-400 animate-spin" />
+            ) : (conversationMode && isUserSpeaking) ? (
               <span className="relative flex h-2.5 w-2.5">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-300 opacity-90"></span>
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-400"></span>
@@ -103,24 +111,24 @@ export default function TerminalCommandDeck({
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
               </span>
-            ) : isListening ? (
+            ) : (
               <span className="relative flex h-2.5 w-2.5">
                 <span className="animate-pulse absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-500"></span>
               </span>
-            ) : (
-              <MicOff className="w-3.5 h-3.5" />
             )}
             <span className="font-orbitron text-[11px] font-semibold">
-              {isHexorSpeaking
+              {!isListening
+                ? "WAKE DISABLED"
+                : isHexorSpeaking
                 ? "HEXOR SPEAKING"
-                : isUserSpeaking
+                : isProcessing
+                ? "THINKING..."
+                : (conversationMode && isUserSpeaking)
                 ? "LISTENING..."
                 : conversationMode
                 ? `CONVERSATION (${convoSecondsLeft}s)`
-                : isListening
-                ? "STANDBY (HEY HEXOR)"
-                : "START WAKE"}
+                : "STANDBY (HEY HEXOR)"}
             </span>
           </button>
         </div>

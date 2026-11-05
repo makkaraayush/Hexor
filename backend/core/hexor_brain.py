@@ -181,7 +181,24 @@ class HexorBrain:
         ui_action = None
         requires_approval = False
 
-        if tool_name == "self_learner":
+        if tool_name == "system_shutdown":
+            spoken_response = spoken_response or "Shutting down Hexor core and closing terminal. Goodbye, Sir."
+            ui_action = "system_shutdown"
+            tool_result = {"status": "shutting_down"}
+
+            async def do_delayed_shutdown():
+                await asyncio.sleep(2.0)
+                try:
+                    import httpx
+                    async with httpx.AsyncClient() as client:
+                        await client.post(f"http://{config.HOST}:{config.PORT}/api/system/shutdown")
+                except Exception:
+                    import os
+                    os._exit(0)
+
+            asyncio.create_task(do_delayed_shutdown())
+
+        elif tool_name == "self_learner":
             skill_request = args.get("skill_request") or user_message
             learn_res = await self.self_learner.learn_and_integrate_skill(skill_request)
             tool_result = learn_res

@@ -51,7 +51,7 @@ class WakeListener:
         self.sample_rate = 16000
         self.chunk_size = 1024
         self.speech_threshold = 35.0  # Dynamically calibrated on mic start
-        self.silence_limit = 0.55     # Snappy turn-taking silence threshold
+        self.silence_limit = 1.2      # Natural conversational pause limit (1.2s)
         self.max_record_seconds = 7.0
 
         # Continuous hands-free conversation state
@@ -60,6 +60,16 @@ class WakeListener:
         self.recognizer = sr.Recognizer() if HAS_SR else None
 
         _kill_sapisvr()
+
+    def enter_standby(self):
+        """Immediately drop conversation mode and require wake word."""
+        self.conversation_until = 0.0
+        print("[WakeListener] Standby mode engaged. Wake word required.")
+        if self.broadcast_callback and self.loop:
+            asyncio.run_coroutine_threadsafe(
+                self.broadcast_callback({"type": "standby_entered"}),
+                self.loop
+            )
 
     def start(self, loop: asyncio.AbstractEventLoop):
         if not HAS_SOUNDDEVICE:
@@ -176,9 +186,6 @@ class WakeListener:
                                         self.broadcast_callback({"type": "user_speaking", "speaking": True}),
                                         self.loop
                                     )
-                            # Dynamically hold open conversation timeout while user is actively speaking
-                            if was_convo_at_start or time.time() < self.conversation_until:
-                                self.conversation_until = time.time() + 25.0
                             silence_start = None
                             audio_buffer.append(data)
                         elif is_speaking:

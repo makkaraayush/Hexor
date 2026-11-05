@@ -285,6 +285,14 @@ async def toggle_wake_listener(req: Dict[str, Any]):
         return {"success": True, "enabled": enabled}
     return {"success": False, "message": "Wake listener not initialized."}
 
+@app.post("/api/voice/standby")
+async def enter_standby_endpoint():
+    global wake_listener
+    if wake_listener:
+        wake_listener.enter_standby()
+        return {"success": True, "state": "standby"}
+    return {"success": False, "message": "Wake listener not initialized."}
+
 @app.post("/api/system/shutdown")
 async def shutdown_system():
     async def do_exit():

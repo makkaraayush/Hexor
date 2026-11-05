@@ -373,6 +373,19 @@ INSTRUCTIONS:
                 "direct_response": "Night protocol engaged, Sir. Silencing non-essential telemetry and securing the deck."
             }
 
+        # System Shutdown / Turn Off Hexor
+        if any(w in lower for w in [
+            "shut down hexor", "shutdown hexor", "shut down system", "shutdown system",
+            "turn off hexor", "power down hexor", "exit hexor", "close hexor", "terminate hexor",
+            "shut down", "shutdown", "power down"
+        ]) and not any(w in lower for w in ["printer", "light", "alarm", "music", "app", "pc", "computer", "screen", "bambu"]):
+            return {
+                "thought": "Triggering complete Hexor shutdown and closing terminal.",
+                "tool_name": "system_shutdown",
+                "arguments": {},
+                "direct_response": "Shutting down Hexor core and closing terminal. Goodbye, Sir."
+            }
+
         # Screen Vision & Clipboard
         if any(w in lower for w in ["look at my screen", "what's on my screen", "inspect screen", "what is on my screen", "read my screen", "see my screen", "debug my screen", "what error is this", "what error do you see"]):
             return {
