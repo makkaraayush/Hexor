@@ -201,7 +201,10 @@ export default function App() {
   useEffect(() => {
     const detectDevices = async () => {
       try {
-        await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {});
+        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => null);
+        if (tempStream) {
+          tempStream.getTracks().forEach(track => track.stop());
+        }
         const devices = await navigator.mediaDevices.enumerateDevices();
         const inputs = devices.filter(d => d.kind === 'audioinput');
         const outputs = devices.filter(d => d.kind === 'audiooutput');
@@ -303,10 +306,11 @@ export default function App() {
             }
           } else if (data.type === "system_shutdown") {
             setIsSystemShuttingDown(true);
+            stopWebSpeech();
             setTimeout(() => {
               try { window.close(); } catch (e) {}
               window.location.href = "about:blank";
-            }, 1000);
+            }, 500);
           } else if (data.type === "standby_entered") {
             conversationActiveUntilRef.current = 0;
             setConversationMode(false);
@@ -344,176 +348,234 @@ export default function App() {
   }, []);
 
   // Speech Recognition (Web Speech API)
-  useEffect(() => {
+  const stopWebSpeech = () => {
+    isListeningRef.current = false;
+    setIsListening(false);
+    setIsUserSpeaking(false);
+    setConversationMode(false);
+    conversationActiveUntilRef.current = 0;
+    setConvoSecondsLeft(0);
+    setInterimTranscript('');
+    accumulatedTranscriptRef.current = '';
+    wasInConvoBeforeSpeakingRef.current = false;
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onstart = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onspeechstart = null;
+        recognitionRef.current.onspeechend = null;
+        recognitionRef.current.abort();
+      } catch (e) {}
+      recognitionRef.current = null;
+    }
+  };
+
+  const startWebSpeech = () => {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      const recognition = new SpeechRecognition();
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.lang = 'en-US';
+    if (!SpeechRecognition) return;
 
-      recognition.onstart = () => {
-        setIsListening(true);
-        isListeningRef.current = true;
-      };
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onstart = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.abort();
+      } catch (e) {}
+      recognitionRef.current = null;
+    }
 
-      let restartTimer = null;
-      const safeRestart = () => {
-        if (!isListeningRef.current) return;
-        if (restartTimer) clearTimeout(restartTimer);
-        restartTimer = setTimeout(() => {
+    isListeningRef.current = true;
+    setIsListening(true);
+    accumulatedTranscriptRef.current = '';
+    setInterimTranscript('');
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+
+    recognition.onstart = () => {
+      if (!isListeningRef.current) {
+        try { recognition.abort(); } catch (e) {}
+        return;
+      }
+      setIsListening(true);
+    };
+
+    let restartTimer = null;
+    const safeRestart = () => {
+      if (!isListeningRef.current) return;
+      if (restartTimer) clearTimeout(restartTimer);
+      restartTimer = setTimeout(() => {
+        try {
+          if (isListeningRef.current && recognitionRef.current) {
+            recognitionRef.current.start();
+          }
+        } catch (err) {
+          if (err.name !== 'InvalidStateError' && isListeningRef.current) {
+            setTimeout(safeRestart, 400);
+          }
+        }
+      }, 150);
+    };
+
+    recognition.onend = () => {
+      if (!isListeningRef.current) return;
+      safeRestart();
+    };
+
+    recognition.onerror = (e) => {
+      if (e.error === 'not-allowed') {
+        console.warn("Microphone access denied by browser.");
+        stopWebSpeech();
+        return;
+      }
+      if (e.error === 'aborted' || !isListeningRef.current) {
+        return;
+      }
+      safeRestart();
+    };
+
+    recognition.onspeechstart = () => {
+      if (isListeningRef.current && !isSpeakingRef.current && conversationActiveUntilRef.current > Date.now()) {
+        triggerUserSpeaking(true);
+      }
+    };
+
+    recognition.onspeechend = () => {
+      triggerUserSpeaking(false);
+    };
+
+    recognition.onresult = (event) => {
+      if (!isListeningRef.current) return;
+      let currentInterim = '';
+      let finalChunk = '';
+
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
+        if (event.results[i].isFinal) {
+          finalChunk += event.results[i][0].transcript;
+        } else {
+          currentInterim += event.results[i][0].transcript;
+        }
+      }
+
+      const chunkText = (finalChunk || currentInterim).trim();
+      if (!chunkText) return;
+
+      // Barge-in: Only trigger if the user explicitly says an interrupt command, never on Hexor's own voice feedback
+      if (isSpeakingRef.current) {
+        if (/(?:stop|wait|pause|quiet|cancel|silence|hexor|jarvis)/i.test(chunkText)) {
           try {
-            if (isListeningRef.current && recognitionRef.current) {
-              recognitionRef.current.start();
-            }
-          } catch (err) {
-            if (err.name !== 'InvalidStateError') {
-              setTimeout(safeRestart, 400);
-            }
+            audioRef.current.pause();
+            audioRef.current.currentTime = 0;
+          } catch (e) {}
+          if (window.speechSynthesis) {
+            window.speechSynthesis.cancel();
           }
-        }, 150);
-      };
-
-      recognition.onend = safeRestart;
-
-      recognition.onspeechstart = () => {
-        if (isListeningRef.current && !isSpeakingRef.current) {
-          triggerUserSpeaking(true);
+          resetSpeakingState();
         }
-      };
+        return;
+      }
 
-      recognition.onspeechend = () => {
-        triggerUserSpeaking(false);
-      };
+      if (finalChunk.trim()) {
+        accumulatedTranscriptRef.current += ' ' + finalChunk.trim();
+      }
 
-      recognition.onerror = (e) => {
-        if (e.error === 'not-allowed') {
-          console.warn("Microphone access denied by browser.");
-          isListeningRef.current = false;
-          setIsListening(false);
-          triggerUserSpeaking(false);
-          return;
-        }
-        safeRestart();
-      };
+      const candidateText = (accumulatedTranscriptRef.current + ' ' + currentInterim).trim();
+      const isConversationActive = Date.now() < conversationActiveUntilRef.current;
 
-      recognition.onresult = (event) => {
-        if (!isListeningRef.current) return;
-        let currentInterim = '';
-        let finalChunk = '';
-
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
-          if (event.results[i].isFinal) {
-            finalChunk += event.results[i][0].transcript;
-          } else {
-            currentInterim += event.results[i][0].transcript;
-          }
-        }
-
-        const chunkText = (finalChunk || currentInterim).trim();
-        if (!chunkText) return;
-
-        // Barge-in: Only trigger if the user explicitly says an interrupt command, never on Hexor's own voice feedback
-        if (isSpeakingRef.current) {
-          if (/(?:stop|wait|pause|quiet|cancel|silence|hexor|jarvis)/i.test(chunkText)) {
-            try {
-              audioRef.current.pause();
-              audioRef.current.currentTime = 0;
-            } catch (e) {}
-            if (window.speechSynthesis) {
-              window.speechSynthesis.cancel();
-            }
-            resetSpeakingState();
-          }
-          return;
-        }
-
-        if (finalChunk.trim()) {
-          accumulatedTranscriptRef.current += ' ' + finalChunk.trim();
-        }
-
-        const candidateText = (accumulatedTranscriptRef.current + ' ' + currentInterim).trim();
+      if (isConversationActive) {
         setInterimTranscript(currentInterim || finalChunk);
+      }
 
-        const isConversationActive = Date.now() < conversationActiveUntilRef.current;
+      // Wake word regex
+      const wakeRegex = /(?:(?:hey|ok|okay|hi|hello|yo)\s+)?(?:hex[\s_-]?(?:or|er|ar|ur|o|sir|are)?|heck[\s_-]?(?:sir|er|or|le)?|hack[\s_-]?(?:sir|er|saw)?|exor|exer|jarvis|javis|travis|charvis|hector|vector|axel)\b/i;
+      const wakeMatch = candidateText.match(wakeRegex);
 
-        // Expanded phonetic wake word detection ("Hexor" alone, "Hex", "Hey Hexor", "Jarvis", etc.)
-        const wakeRegex = /(?:(?:hey|ok|okay|hi|hello|yo)\s+)?(?:hex[\s_-]?(?:or|er|ar|ur|o|sir|are)?|heck[\s_-]?(?:sir|er|or|le)?|hack[\s_-]?(?:sir|er|saw)?|exor|exer|jarvis|javis|travis|charvis|hector|vector|axel)\b/i;
-        const wakeMatch = candidateText.match(wakeRegex);
+      if (wakeMatch) {
+        playWakeChime();
+        triggerUserSpeaking(false);
+        conversationActiveUntilRef.current = Date.now() + 25000;
+        setConversationMode(true);
 
-        if (wakeMatch) {
-          playWakeChime();
+        const command = candidateText.substring(wakeMatch.index + wakeMatch[0].length).replace(/^[,.\s]+/, '').trim();
+        accumulatedTranscriptRef.current = '';
+        setInterimTranscript('');
+
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+
+        if (command.length > 2) {
+          silenceTimerRef.current = setTimeout(() => {
+            sendMessage(command);
+          }, 300);
+        } else {
+          const wakeReply = "Online, Sir.";
+          setMessages(prev => [
+            ...prev,
+            { role: 'user', content: candidateText || "Hey Hexor" },
+            { role: 'assistant', content: wakeReply }
+          ]);
+          speakText(wakeReply);
+        }
+        return;
+      }
+
+      // Active hands-free conversation mode
+      if (isConversationActive) {
+        triggerUserSpeaking(true);
+        conversationActiveUntilRef.current = Date.now() + 25000;
+        setConversationMode(true);
+
+        if (/(?:stand\s*down|stop\s*listening|dismissed|hexor\s*stand\s*down|jarvis\s*stand\s*down|shut\s*up|stop\s*talking|exit\s*conversation)/i.test(candidateText)) {
           triggerUserSpeaking(false);
-          conversationActiveUntilRef.current = Date.now() + 25000;
-          setConversationMode(true);
-
-          const command = candidateText.substring(wakeMatch.index + wakeMatch[0].length).replace(/^[,.\s]+/, '').trim();
+          conversationActiveUntilRef.current = 0;
+          setConversationMode(false);
+          setConvoSecondsLeft(0);
           accumulatedTranscriptRef.current = '';
           setInterimTranscript('');
-
-          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-
-          if (command.length > 2) {
-            silenceTimerRef.current = setTimeout(() => {
-              sendMessage(command);
-            }, 300);
-          } else {
-            // Immediate verbal acknowledgment so user knows it's out of standby
-            const wakeReply = "Online, Sir.";
-            setMessages(prev => [...prev, { role: 'assistant', content: wakeReply }]);
-            speakText(wakeReply);
-          }
+          fetch('/api/voice/standby', { method: 'POST' }).catch(() => {});
+          handleAssistantResponse({
+            user_prompt: candidateText || "Stand down",
+            response_text: "Standing by, Sir. Just call my name whenever you require assistance.",
+            ui_action: "standby",
+            latency_seconds: 0.1
+          });
           return;
         }
 
-        // Active hands-free conversation mode (ONLY show LISTENING... and process input when conversation is active)
-        if (isConversationActive) {
-          triggerUserSpeaking(true);
-          // Actively speaking: hold conversation mode open and refresh inactivity countdown
-          conversationActiveUntilRef.current = Date.now() + 25000;
-          setConversationMode(true);
-
-          if (/(?:stand\s*down|stop\s*listening|dismissed|hexor\s*stand\s*down|jarvis\s*stand\s*down|shut\s*up|stop\s*talking|exit\s*conversation)/i.test(candidateText)) {
-            triggerUserSpeaking(false);
-            conversationActiveUntilRef.current = 0;
-            setConversationMode(false);
-            setConvoSecondsLeft(0);
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = setTimeout(() => {
+          triggerUserSpeaking(false);
+          if (isSpeakingRef.current) return;
+          const fullQuery = (accumulatedTranscriptRef.current + ' ' + currentInterim).trim();
+          if (fullQuery.length > 1) {
+            conversationActiveUntilRef.current = Date.now() + 25000;
+            setConversationMode(true);
+            sendMessage(fullQuery);
             accumulatedTranscriptRef.current = '';
             setInterimTranscript('');
-            fetch('/api/voice/standby', { method: 'POST' }).catch(() => {});
-            handleAssistantResponse({
-              response_text: "Standing by, Sir. Just call my name whenever you require assistance.",
-              ui_action: "standby",
-              latency_seconds: 0.1
-            });
-            return;
           }
+        }, 1200);
+      }
+    };
 
-          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
-          // Natural speech pause gap: 1200ms (1.2 seconds) before executing
-          silenceTimerRef.current = setTimeout(() => {
-            triggerUserSpeaking(false);
-            if (isSpeakingRef.current) return;
-            const fullQuery = (accumulatedTranscriptRef.current + ' ' + currentInterim).trim();
-            if (fullQuery.length > 1) {
-              conversationActiveUntilRef.current = Date.now() + 25000;
-              setConversationMode(true);
-              sendMessage(fullQuery);
-              accumulatedTranscriptRef.current = '';
-              setInterimTranscript('');
-            }
-          }, 1200);
-        }
-      };
+    recognitionRef.current = recognition;
+    try {
+      recognition.start();
+    } catch (e) {}
+  };
 
-      recognitionRef.current = recognition;
-
-      try {
-        isListeningRef.current = true;
-        setIsListening(true);
-        recognition.start();
-      } catch (e) {}
-    }
+  useEffect(() => {
+    startWebSpeech();
+    return () => {
+      stopWebSpeech();
+    };
   }, []);
 
   // Ensure voice listener engages on first user click if browser policy required interaction
@@ -538,20 +600,8 @@ export default function App() {
   }, []);
 
   const toggleListening = async () => {
-    if (isListening) {
-      isListeningRef.current = false;
-      setIsListening(false);
-      setIsUserSpeaking(false);
-      setConversationMode(false);
-      conversationActiveUntilRef.current = 0;
-      setConvoSecondsLeft(0);
-      setInterimTranscript('');
-      accumulatedTranscriptRef.current = '';
-      try {
-        if (recognitionRef.current) {
-          recognitionRef.current.abort(); // Immediately cut mic stream in browser
-        }
-      } catch (e) {}
+    if (isListeningRef.current) {
+      stopWebSpeech();
       try {
         await fetch('/api/voice/wake_listener', {
           method: 'POST',
@@ -560,13 +610,7 @@ export default function App() {
         });
       } catch (e) {}
     } else {
-      isListeningRef.current = true;
-      setIsListening(true);
-      accumulatedTranscriptRef.current = '';
-      setInterimTranscript('');
-      try {
-        if (recognitionRef.current) recognitionRef.current.start();
-      } catch (e) {}
+      startWebSpeech();
       try {
         await fetch('/api/voice/wake_listener', {
           method: 'POST',
@@ -698,24 +742,28 @@ export default function App() {
 
     // Handle explicit standby or shutdown from assistant
     if (payload.ui_action === "system_shutdown") {
+      stopWebSpeech();
       setIsSystemShuttingDown(true);
       setTimeout(() => {
         try { window.close(); } catch (e) {}
         window.location.href = "about:blank";
-      }, 1800);
+      }, 1500);
     } else if (payload.ui_action === "standby") {
       conversationActiveUntilRef.current = 0;
       setConversationMode(false);
       setConvoSecondsLeft(0);
       setIsUserSpeaking(false);
       fetch('/api/voice/standby', { method: 'POST' }).catch(() => {});
-    } else if (conversationMode || conversationActiveUntilRef.current > Date.now()) {
+    } else if (payload.ui_action === "alarm_stopped") {
+      setRingingAlarm(null);
+    } else if (isListeningRef.current && (conversationMode || conversationActiveUntilRef.current > Date.now())) {
       // Refresh hands-free conversation window so user can speak follow-ups naturally
       conversationActiveUntilRef.current = Date.now() + 25000;
       setConversationMode(true);
     }
 
-    const newMsg = {
+    const prompt = (payload.user_prompt || '').trim();
+    const newAssistantMsg = {
       role: 'assistant',
       content: payload.response_text,
       tool_name: payload.tool_name,
@@ -723,7 +771,19 @@ export default function App() {
       web_results: payload.tool_result?.data?.results
     };
 
-    setMessages(prev => [...prev, newMsg]);
+    setMessages(prev => {
+      if (prompt) {
+        const lastMsg = prev[prev.length - 1];
+        if (!lastMsg || lastMsg.role !== 'user' || lastMsg.content.toLowerCase().trim() !== prompt.toLowerCase()) {
+          return [
+            ...prev,
+            { role: 'user', content: prompt },
+            newAssistantMsg
+          ];
+        }
+      }
+      return [...prev, newAssistantMsg];
+    });
 
     if (payload.ui_action === "show_3d_approval" || payload.requires_approval) {
       setPendingApproval(payload.tool_result?.data);
@@ -849,6 +909,7 @@ export default function App() {
   const handleShutdownConfirm = async () => {
     setIsSystemShuttingDown(true);
     setIsShutdownConfirmOpen(false);
+    stopWebSpeech();
     try {
       await fetch('/api/system/shutdown', { method: 'POST' });
     } catch (e) {}
@@ -856,7 +917,8 @@ export default function App() {
       try {
         window.close();
       } catch (e) {}
-    }, 800);
+      window.location.href = "about:blank";
+    }, 400);
   };
 
   return (

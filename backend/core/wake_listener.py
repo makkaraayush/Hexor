@@ -58,6 +58,7 @@ class WakeListener:
         self.conversation_until = 0.0
         self.cached_wake_audio: Optional[Dict[str, Any]] = None
         self.recognizer = sr.Recognizer() if HAS_SR else None
+        self._active_stream: Optional[Any] = None
 
         _kill_sapisvr()
 
@@ -97,9 +98,28 @@ class WakeListener:
 
     def stop(self):
         self.is_running = False
+        if self._active_stream:
+            try:
+                self._active_stream.abort()
+                self._active_stream.close()
+            except Exception:
+                pass
+            self._active_stream = None
 
     def set_enabled(self, enabled: bool):
         self.is_enabled = enabled
+        if not enabled:
+            self.conversation_until = 0.0
+            if self._active_stream:
+                try:
+                    self._active_stream.abort()
+                    self._active_stream.close()
+                except Exception:
+                    pass
+                self._active_stream = None
+            print("[WakeListener] Microphone hardware released and muted (Wake listener disabled).")
+        else:
+            print("[WakeListener] Wake listener enabled.")
 
     def notify_hexor_speaking(self, duration_seconds: float):
         self.cooldown_until = time.time() + duration_seconds + 0.2
@@ -152,14 +172,15 @@ class WakeListener:
                 continue
 
             try:
-                with sd.InputStream(
+                stream = sd.InputStream(
                     device=device_id,
                     channels=1,
                     samplerate=self.sample_rate,
                     dtype='int16',
                     blocksize=self.chunk_size
-                ) as stream:
-
+                )
+                self._active_stream = stream
+                with stream:
                     audio_buffer = []
                     is_speaking = False
                     silence_start = None
@@ -168,9 +189,13 @@ class WakeListener:
 
                     while self.is_running and self.is_enabled:
                         if time.time() < self.cooldown_until:
-                            break
+                            time.sleep(0.05)
+                            continue
 
-                        data, _ = stream.read(self.chunk_size)
+                        try:
+                            data, _ = stream.read(self.chunk_size)
+                        except Exception:
+                            break
                         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
                         rms = float(np.sqrt(np.mean(samples**2)))
 
@@ -222,6 +247,8 @@ class WakeListener:
 
             except Exception as e:
                 time.sleep(0.5)
+            finally:
+                self._active_stream = None
 
     def _process_speech(self, raw_audio_bytes: bytes, was_convo_at_start: bool = False):
         if not self.recognizer or not HAS_SR:

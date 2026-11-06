@@ -295,6 +295,15 @@ async def enter_standby_endpoint():
 
 @app.post("/api/system/shutdown")
 async def shutdown_system():
+    # 0. Immediately release microphone hardware and stop background listener
+    global wake_listener
+    if wake_listener:
+        try:
+            wake_listener.set_enabled(False)
+            wake_listener.stop()
+        except Exception:
+            pass
+
     async def do_exit():
         # 1. Inform frontend via WebSocket that system is shutting down
         try:
@@ -302,7 +311,7 @@ async def shutdown_system():
         except Exception:
             pass
 
-        await asyncio.sleep(0.3)
+        await asyncio.sleep(0.4)
         try:
             import ctypes
             import psutil
@@ -321,33 +330,21 @@ async def shutdown_system():
                 pass
 
             curr_pid = os.getpid()
-            curr = psutil.Process(curr_pid)
-            parent = curr.parent()
 
-            pids_to_kill = [curr_pid]
-            # If parent is python (e.g. uvicorn reloader supervisor), include it for termination
-            if parent and "python" in parent.name().lower():
-                try:
-                    cmdline = " ".join(parent.cmdline() if hasattr(parent, 'cmdline') else []).lower()
-                    if not any(safe in cmdline for safe in ["antigravity", "code", "vscode", "cursor", "pycharm", "idea"]):
-                        pids_to_kill.append(parent.pid)
-                except Exception:
-                    pass
-
-            # Terminate Hexor child processes (excluding external user apps)
-            for child in curr.children(recursive=True):
-                try:
-                    cname = child.name().lower()
-                    if cname not in ["spotify.exe", "chrome.exe", "msedge.exe", "bambu-studio.exe"]:
-                        child.kill()
-                except Exception:
-                    pass
-
-            for pid in pids_to_kill:
-                try:
-                    subprocess.Popen(f"taskkill /F /PID {pid} /T", shell=True)
-                except Exception:
-                    pass
+            # Launch detached watchdog to kill the dedicated terminal window, run Close_hexor.bat, and free ports
+            close_bat = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Close_hexor.bat")
+            if os.path.exists(close_bat):
+                subprocess.Popen(
+                    f'cmd.exe /c "timeout /t 1 /nobreak >nul & call \"{close_bat}\""',
+                    shell=True,
+                    creationflags=0x08000000 if sys.platform == "win32" else 0
+                )
+            else:
+                subprocess.Popen(
+                    f'cmd.exe /c "timeout /t 1 /nobreak >nul & taskkill /F /FI \"WINDOWTITLE eq HEXOR AI OS*\" >nul 2>&1 & taskkill /F /PID {curr_pid} /T >nul 2>&1"',
+                    shell=True,
+                    creationflags=0x08000000 if sys.platform == "win32" else 0
+                )
 
             os._exit(0)
         except Exception:

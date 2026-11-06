@@ -88,6 +88,7 @@ Hexor/
 │   └── CHALLENGES_AND_SOLUTIONS.md # Detailed engineering post-mortem
 ├── run_hexor.py                   # Python entry point
 ├── start_hexor.bat                # Windows quick launcher
+├── Close_hexor.bat                # Quick shutdown script (kills core, terminal & ports)
 └── .env.example                   # Environment configuration template
 ```
 
@@ -238,6 +239,19 @@ Hexor can be controlled by voice or by typing directly into the terminal/HUD int
   - *"Stand down."*
   - *"Stop listening."*
   - *"Dismissed."*
+- **System Shutdown & Process Exit**:
+  - *"Shut down Hexor."*
+  - *"Power down system."*
+  - *"Close Hexor."*
+
+---
+
+### Shutting Down Hexor Completely
+
+Hexor is designed to release all hardware resources (microphone handles, audio drivers) and terminate cleanly with zero background overhead:
+1. **Via Voice**: Say *"Hexor, shut down"* or *"Power down system"*.
+2. **Via HUD**: Click the red Power icon in the top header and confirm.
+3. **Via Batch Script**: Double-click `Close_hexor.bat`. It will gracefully signal Hexor to shut down, close the dedicated terminal window, terminate all child processes, and release port 8000.
 
 ---
 
