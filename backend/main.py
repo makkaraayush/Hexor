@@ -135,8 +135,8 @@ async def system_watchdog():
                 if not bambu_skill._telemetry.get("connected") or not bambu_skill._mqtt_client:
                     bambu_skill._init_mqtt()
 
-            # 3. Wake listener health check
-            if wake_listener and wake_listener.is_running:
+            # 3. Wake listener health check — only restart if wake is ENABLED
+            if wake_listener and wake_listener.is_enabled:
                 if not wake_listener.thread or not wake_listener.thread.is_alive():
                     loop = asyncio.get_running_loop()
                     wake_listener.start(loop)

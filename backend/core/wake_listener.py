@@ -112,8 +112,20 @@ class WakeListener:
         self.is_enabled = enabled
         if not enabled:
             self.conversation_until = 0.0
-            print("[WakeListener] Microphone hardware release requested (Wake listener disabled).")
+            # Fully stop thread so mic hardware is released at OS level
+            self.is_running = False
+            if self._active_stream:
+                try:
+                    self._active_stream.abort()
+                    self._active_stream.close()
+                except Exception:
+                    pass
+                self._active_stream = None
+            print("[WakeListener] Microphone FULLY released. Wake listener stopped.")
         else:
+            # Restart thread if disabled previously
+            if self.loop and (not self.thread or not self.thread.is_alive()):
+                self.start(self.loop)
             print("[WakeListener] Wake listener enabled.")
 
     def notify_hexor_speaking(self, duration_seconds: float, extend_conversation: bool = True):
@@ -162,7 +174,8 @@ class WakeListener:
 
     def _mic_listen_loop(self):
         device_id = self._get_best_input_device()
-        self._calibrate_noise_floor(device_id)
+        if self.is_enabled:
+            self._calibrate_noise_floor(device_id)
 
         while self.is_running:
             if not self.is_enabled or time.time() < self.cooldown_until:
