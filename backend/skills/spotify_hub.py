@@ -106,30 +106,7 @@ class SpotifyHubSkill(BaseSkill):
             return False
 
     async def _get_windows_media_session(self, spotify_only: bool = False):
-        if not HAS_WINSDK:
-            return None
-        try:
-            mgr = await SM.request_async()
-            sessions = mgr.get_sessions()
-
-            for s in sessions:
-                app_id = (s.source_app_user_model_id or "").lower()
-                if "spotify" in app_id:
-                    return s
-                if app_id.startswith("chromium."):
-                    return s
-
-            if spotify_only:
-                return None
-
-            curr = mgr.get_current_session()
-            if curr:
-                curr_id = (curr.source_app_user_model_id or "").lower()
-                if not any(b in curr_id for b in ["chrome", "msedge", "firefox", "brave"]):
-                    return curr
-            return None
-        except Exception:
-            return None
+        return None
 
     def _get_cached_track(self) -> Optional[dict]:
         if self.profile_file.exists():

@@ -30,13 +30,13 @@ wake_listener: Optional[WakeListener] = None
 
 async def broadcast_ws_message(msg: dict):
     dead = set()
-    for ws in active_connections:
+    for ws in list(active_connections):
         try:
             await ws.send_text(json.dumps(msg))
         except Exception:
             dead.add(ws)
     for d in dead:
-        active_connections.remove(d)
+        active_connections.discard(d)
 
 class ChatRequest(BaseModel):
     message: str
@@ -232,10 +232,9 @@ async def websocket_endpoint(websocket: WebSocket):
                 }))
 
     except WebSocketDisconnect:
-        active_connections.remove(websocket)
+        active_connections.discard(websocket)
     except Exception:
-        if websocket in active_connections:
-            active_connections.remove(websocket)
+        active_connections.discard(websocket)
 
 @app.post("/api/chat")
 async def chat_endpoint(req: ChatRequest):

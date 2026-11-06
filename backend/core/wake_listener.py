@@ -79,6 +79,8 @@ class WakeListener:
 
         _kill_sapisvr()
         self.loop = loop
+        if self.thread and self.thread.is_alive():
+            return
         self.is_running = True
         self.thread = threading.Thread(target=self._mic_listen_loop, daemon=True)
         self.thread.start()

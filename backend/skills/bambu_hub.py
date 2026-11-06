@@ -190,7 +190,6 @@ class BambuHubSkill(BaseSkill):
     def _send_bambu_command(self, cmd_dict: dict) -> bool:
         if not self._mqtt_client or not self._telemetry.get("connected"):
             self._init_mqtt()
-            time.sleep(0.3)
         if self._mqtt_client and self.serial:
             try:
                 topic = f"device/{self.serial}/request"
