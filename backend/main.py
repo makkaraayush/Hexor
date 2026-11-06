@@ -67,14 +67,17 @@ class SpeakRequest(BaseModel):
 
 active_connections: set[WebSocket] = set()
 
+telemetry_broadcast_task: Optional[asyncio.Task] = None
+
 @app.on_event("startup")
 async def startup_event():
-    global wake_listener
+    global wake_listener, telemetry_broadcast_task
     await brain.llm_router.auto_configure_models()
     weather_skill = brain.skills.get("weather_location")
     if weather_skill:
         asyncio.create_task(weather_skill.execute(action="get_weather"))
-    asyncio.create_task(telemetry_broadcaster())
+    telemetry_broadcast_task = asyncio.create_task(telemetry_broadcaster())
+    asyncio.create_task(system_watchdog())
 
     # Start background alarm system
     alarm_skill = brain.skills.get("alarm_clock")
@@ -111,6 +114,36 @@ async def startup_event():
 
     spotify_bridge.on_status_change = on_spotify_bridge_status
 
+async def system_watchdog():
+    """
+    Continuous live system watchdog.
+    Verifies that broadcaster, Bambu MQTT, wake listener, and telemetry subsystems
+    stay active and fully operational. Automatically fixes any stalled component.
+    """
+    global telemetry_broadcast_task, wake_listener
+    while True:
+        try:
+            await asyncio.sleep(4.0)
+
+            # 1. Broadcaster health check
+            if telemetry_broadcast_task is None or telemetry_broadcast_task.done():
+                telemetry_broadcast_task = asyncio.create_task(telemetry_broadcaster())
+
+            # 2. Bambu MQTT connection check
+            bambu_skill = brain.skills.get("bambu_hub")
+            if bambu_skill and bambu_skill.lan_ip and bambu_skill.serial and bambu_skill.access_code:
+                if not bambu_skill._telemetry.get("connected") or not bambu_skill._mqtt_client:
+                    bambu_skill._init_mqtt()
+
+            # 3. Wake listener health check
+            if wake_listener and wake_listener.is_running:
+                if not wake_listener.thread or not wake_listener.thread.is_alive():
+                    loop = asyncio.get_running_loop()
+                    wake_listener.start(loop)
+
+        except Exception as e:
+            pass
+
 async def telemetry_broadcaster():
     weather_tick = 0
     while True:
@@ -121,21 +154,21 @@ async def telemetry_broadcaster():
                 weather_skill = brain.skills.get("weather_location")
                 spotify_skill = brain.skills.get("spotify_hub")
                 
-                # Fetch system telemetry safely
+                # Fetch system telemetry safely with 1s timeout
                 try:
-                    system_data = await telemetry_skill.execute(action="get_metrics") if telemetry_skill else {}
+                    system_data = await asyncio.wait_for(telemetry_skill.execute(action="get_metrics"), timeout=1.0) if telemetry_skill else {}
                 except Exception:
                     system_data = {}
 
                 # Fetch Bambu telemetry safely (fast cached)
                 try:
-                    bambu_data = bambu_skill.get_cached_telemetry() if (bambu_skill and hasattr(bambu_skill, "get_cached_telemetry")) else (await bambu_skill.execute(action="get_status") if bambu_skill else {})
+                    bambu_data = bambu_skill.get_cached_telemetry() if (bambu_skill and hasattr(bambu_skill, "get_cached_telemetry")) else (await asyncio.wait_for(bambu_skill.execute(action="get_status"), timeout=1.0) if bambu_skill else {})
                 except Exception:
                     bambu_data = {}
 
-                # Fetch Spotify telemetry safely
+                # Fetch Spotify telemetry safely with 1s timeout
                 try:
-                    spotify_data = await spotify_skill.execute(action="status") if spotify_skill else {}
+                    spotify_data = await asyncio.wait_for(spotify_skill.execute(action="status"), timeout=1.0) if spotify_skill else {}
                 except Exception:
                     spotify_data = {}
                 
@@ -505,11 +538,22 @@ async def add_productivity_note(req: NoteAddRequest):
         return await skill.execute(action="take_note", title=req.title, text=req.content)
     return {"success": False}
 
+class SpotifyActionRequest(BaseModel):
+    action: str
+    query: Optional[str] = ""
+
 @app.get("/api/spotify/status")
 async def get_spotify_status():
     skill = brain.skills.get("spotify_hub")
     if skill:
         return await skill.execute(action="status")
+    return {"success": False}
+
+@app.post("/api/spotify/action")
+async def spotify_action_endpoint(req: SpotifyActionRequest):
+    skill = brain.skills.get("spotify_hub")
+    if skill:
+        return await skill.execute(action=req.action, query=req.query)
     return {"success": False}
 
 @app.get("/api/skills")

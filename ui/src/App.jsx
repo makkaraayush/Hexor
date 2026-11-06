@@ -67,6 +67,8 @@ export default function App() {
   const silenceTimerRef = useRef(null);
   const accumulatedTranscriptRef = useRef('');
   const wsRef = useRef(null);
+  const connectWsRef = useRef(null);
+  const processingStartedAtRef = useRef(null);
 
   const triggerUserSpeaking = (active = true) => {
     // If wake listener / standby is turned off, do NOT trigger user speaking state!
@@ -273,69 +275,79 @@ export default function App() {
     const wsUrl = `${protocol}//${window.location.host}/ws`;
     
     const connectWs = () => {
-      const ws = new WebSocket(wsUrl);
-      wsRef.current = ws;
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          if (data.type === "hud_telemetry") {
-            if (data.system) setTelemetry(data.system);
-            if (data.bambu) setBambuData(data.bambu);
-            if (data.weather && data.weather.location) setWeatherData(data.weather);
-            if (data.spotify) setSpotifyData(data.spotify);
-            if (data.pending_approval !== undefined) setPendingApproval(data.pending_approval);
-          } else if (data.type === "spotify_update" && data.data) {
-            setSpotifyData(data.data);
-          } else if (data.type === "alarm_triggered") {
-            setRingingAlarm(data.alarm);
-            if (data.greeting) {
-              setMessages(prev => [...prev, { role: 'assistant', content: data.greeting }]);
-            }
-            if (data.audio?.audio_base64 && voiceEnabled) {
-              playVoiceAudio(data.audio.audio_base64, data.audio.mime_type);
-            }
-          } else if (data.type === "alarm_stopped") {
-            setRingingAlarm(null);
-          } else if (data.type === "user_speaking") {
-            if (isListeningRef.current) {
-              triggerUserSpeaking(!!data.speaking);
-              // Only extend conversation timeout if already actively in conversation!
-              if (data.speaking && (conversationActiveUntilRef.current > Date.now())) {
-                conversationActiveUntilRef.current = Date.now() + 25000;
-              }
-            }
-          } else if (data.type === "system_shutdown") {
-            setIsSystemShuttingDown(true);
-            stopWebSpeech();
-            setTimeout(() => {
-              try { window.close(); } catch (e) {}
-              window.location.href = "about:blank";
-            }, 500);
-          } else if (data.type === "standby_entered") {
-            conversationActiveUntilRef.current = 0;
-            setConversationMode(false);
-            setIsUserSpeaking(false);
-            setConvoSecondsLeft(0);
-          } else if (data.type === "wake_detected") {
-            if (isListeningRef.current) {
-              playWakeChime();
-              conversationActiveUntilRef.current = Date.now() + 25000;
-              setConversationMode(true);
-            }
-          } else if (data.type === "chat_response" || data.type === "approval_response") {
-            handleAssistantResponse(data.payload);
-          }
-        } catch (e) {
-          console.error(e);
+      try {
+        if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN || wsRef.current.readyState === WebSocket.CONNECTING)) {
+          return;
         }
-      };
+        const ws = new WebSocket(wsUrl);
+        wsRef.current = ws;
 
-      ws.onclose = () => {
-        setTimeout(connectWs, 3000);
-      };
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === "hud_telemetry") {
+              if (data.system) setTelemetry(data.system);
+              if (data.bambu) setBambuData(data.bambu);
+              if (data.weather && data.weather.location) setWeatherData(data.weather);
+              if (data.spotify) setSpotifyData(data.spotify);
+              if (data.pending_approval !== undefined) setPendingApproval(data.pending_approval);
+            } else if (data.type === "spotify_update" && data.data) {
+              setSpotifyData(data.data);
+            } else if (data.type === "alarm_triggered") {
+              setRingingAlarm(data.alarm);
+              if (data.greeting) {
+                setMessages(prev => [...prev, { role: 'assistant', content: data.greeting }]);
+              }
+              if (data.audio?.audio_base64 && voiceEnabled) {
+                playVoiceAudio(data.audio.audio_base64, data.audio.mime_type);
+              }
+            } else if (data.type === "alarm_stopped") {
+              setRingingAlarm(null);
+            } else if (data.type === "user_speaking") {
+              if (isListeningRef.current) {
+                triggerUserSpeaking(!!data.speaking);
+                if (data.speaking && (conversationActiveUntilRef.current > Date.now())) {
+                  conversationActiveUntilRef.current = Date.now() + 25000;
+                }
+              }
+            } else if (data.type === "system_shutdown") {
+              setIsSystemShuttingDown(true);
+              stopWebSpeech();
+              setTimeout(() => {
+                try { window.close(); } catch (e) {}
+                window.location.href = "about:blank";
+              }, 500);
+            } else if (data.type === "standby_entered") {
+              conversationActiveUntilRef.current = 0;
+              setConversationMode(false);
+              setIsUserSpeaking(false);
+              setConvoSecondsLeft(0);
+            } else if (data.type === "wake_detected") {
+              if (isListeningRef.current) {
+                playWakeChime();
+                conversationActiveUntilRef.current = Date.now() + 25000;
+                setConversationMode(true);
+              }
+            } else if (data.type === "chat_response" || data.type === "approval_response") {
+              handleAssistantResponse(data.payload);
+            }
+          } catch (e) {
+            console.error(e);
+          }
+        };
+
+        ws.onclose = () => {
+          setTimeout(() => {
+            if (connectWsRef.current) connectWsRef.current();
+          }, 3000);
+        };
+        ws.onerror = () => {
+          try { ws.close(); } catch (e) {}
+        };
+      } catch (e) {}
     };
 
+    connectWsRef.current = connectWs;
     connectWs();
     fetchSkills();
     fetchSpotify();
@@ -357,6 +369,47 @@ export default function App() {
       if (wsRef.current) wsRef.current.close();
     };
   }, []);
+
+  // Continuous Live Self-Healing Watchdog
+  useEffect(() => {
+    const watchdogInterval = setInterval(() => {
+      // 1. Recover WebSocket if dropped or closed
+      if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
+        if (connectWsRef.current) connectWsRef.current();
+      }
+
+      // 2. Failsafe unstick for "Thinking..." state if running over 12 seconds
+      if (isProcessing) {
+        if (!processingStartedAtRef.current) {
+          processingStartedAtRef.current = Date.now();
+        } else if (Date.now() - processingStartedAtRef.current > 12000) {
+          console.warn("[Watchdog] Resetting stuck processing state");
+          setIsProcessing(false);
+          processingStartedAtRef.current = null;
+        }
+      } else {
+        processingStartedAtRef.current = null;
+      }
+
+      // 3. Failsafe unstick if Hexor speaking state is stuck with audio paused
+      if (isHexorSpeaking && audioRef.current && audioRef.current.paused) {
+        resetSpeakingState();
+      }
+
+      // 4. Self-healing REST poll if telemetry or weather is stale (>6 seconds)
+      const isStale = !telemetry.timestamp || (Date.now() / 1000 - telemetry.timestamp > 6);
+      if (isStale) {
+        fetchTelemetry();
+        fetchBambu();
+        fetchSpotify();
+      }
+      if (!weatherData.location || weatherData.location === "Detecting Location...") {
+        fetchWeather();
+      }
+    }, 3000);
+
+    return () => clearInterval(watchdogInterval);
+  }, [isProcessing, isHexorSpeaking, telemetry, weatherData]);
 
   // Speech Recognition (Web Speech API)
   const stopWebSpeech = () => {
@@ -832,6 +885,7 @@ export default function App() {
 
     setMessages(prev => [...prev, { role: 'user', content: text }]);
     setIsProcessing(true);
+    processingStartedAtRef.current = Date.now();
 
     try {
       const res = await fetch('/api/chat', {
@@ -842,11 +896,13 @@ export default function App() {
       const data = await res.json();
       handleAssistantResponse(data);
     } catch (err) {
-      setIsProcessing(false);
       setMessages(prev => [...prev, { 
         role: 'assistant', 
         content: `Connection error: Backend unreachable (${err.message}).` 
       }]);
+    } finally {
+      setIsProcessing(false);
+      processingStartedAtRef.current = null;
     }
   };
 
@@ -907,7 +963,7 @@ export default function App() {
     }
   };
 
-  const handleSpotifyAction = (action, params = {}) => {
+  const handleSpotifyAction = async (action, params = {}) => {
     if (action === "play_song") {
       sendMessage(`Play ${params.query} on Spotify`);
     } else if (action === "play_playlist") {
@@ -915,7 +971,20 @@ export default function App() {
     } else if (action === "recommend_music") {
       sendMessage(`Play ${params.mood} playlist on Spotify`);
     } else {
-      sendMessage(`Spotify ${action}`);
+      try {
+        const res = await fetch('/api/spotify/action', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action })
+        });
+        const data = await res.json();
+        if (data && data.data) {
+          setSpotifyData(prev => ({ ...prev, ...data.data }));
+        }
+        fetchSpotify();
+      } catch (e) {
+        sendMessage(`Spotify ${action}`);
+      }
     }
   };
 

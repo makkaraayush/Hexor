@@ -11,11 +11,8 @@ from .base import BaseSkill
 from ..config import config, STORAGE_DIR
 from .spotify_bridge import spotify_bridge
 
-try:
-    from winsdk.windows.media.control import GlobalSystemMediaTransportControlsSessionManager as SM
-    HAS_WINSDK = True
-except ImportError:
-    HAS_WINSDK = False
+# WinSDK is intentionally disabled to prevent COM apartment deadlocks on Windows 11
+HAS_WINSDK = False
 
 
 class SpotifyHubSkill(BaseSkill):
@@ -54,6 +51,8 @@ class SpotifyHubSkill(BaseSkill):
     def _get_spotipy(self) -> Optional[Any]:
         if not config.SPOTIFY_CLIENT_ID or not config.SPOTIFY_CLIENT_SECRET:
             return None
+        if getattr(self, "_cached_sp", None) is not None:
+            return self._cached_sp
         try:
             import spotipy
             from spotipy.oauth2 import SpotifyOAuth
@@ -67,7 +66,8 @@ class SpotifyHubSkill(BaseSkill):
             )
             token_info = sp_oauth.get_cached_token()
             if token_info:
-                return spotipy.Spotify(auth_manager=sp_oauth)
+                self._cached_sp = spotipy.Spotify(auth_manager=sp_oauth)
+                return self._cached_sp
             return None
         except Exception:
             return None
@@ -293,9 +293,12 @@ class SpotifyHubSkill(BaseSkill):
     async def execute(self, action: str, query: str = "", mood: str = "", **kwargs) -> Dict[str, Any]:
         try:
             sp = self._get_spotipy()
-            session = await self._get_windows_media_session()
 
             if action in ["play", "pause"]:
+                track = self._get_cached_track() or {"title": "Spotify", "artist": "Media Player"}
+                track["status"] = "playing" if action == "play" else "idle"
+                self._update_profile_current_track(track)
+
                 if spotify_bridge.is_connected:
                     if action == "play":
                         await spotify_bridge.send_command("play")
@@ -304,67 +307,49 @@ class SpotifyHubSkill(BaseSkill):
                     return {
                         "success": True,
                         "message": f"Spotify playback {action}ed via internal bridge.",
-                        "data": {"action": action},
+                        "data": {"action": action, "current_track": track},
                         "ui_action": "spotify_update"
                     }
 
                 if sp and not self.api_premium_blocked:
                     try:
-                        if action == "play":
-                            sp.start_playback()
-                        else:
-                            sp.pause_playback()
+                        def do_sp_play():
+                            if action == "play":
+                                sp.start_playback()
+                            else:
+                                sp.pause_playback()
+                        await asyncio.wait_for(asyncio.to_thread(do_sp_play), timeout=0.8)
                         return {
                             "success": True,
                             "message": f"Spotify {action}ed via Web API.",
-                            "data": {"action": action},
+                            "data": {"action": action, "current_track": track},
                             "ui_action": "spotify_update"
                         }
                     except Exception as e:
                         if "403" in str(e) or "premium" in str(e).lower():
                             self.api_premium_blocked = True
 
-                if session:
-                    try:
-                        if action == "play":
-                            await session.try_play_async()
-                        else:
-                            await session.try_pause_async()
-                        return {
-                            "success": True,
-                            "message": f"Spotify playback {action}ed.",
-                            "data": {"action": action},
-                            "ui_action": "spotify_update"
-                        }
-                    except Exception:
-                        pass
-
                 self._send_media_key(179)
                 return {
                     "success": True,
                     "message": "Spotify playback toggled.",
-                    "data": {"action": action},
+                    "data": {"action": action, "current_track": track},
                     "ui_action": "spotify_update"
                 }
 
             elif action == "next":
                 if spotify_bridge.is_connected:
                     await spotify_bridge.send_command("next")
-                    return {"success": True, "message": "Skipped to next track via internal bridge.", "data": {"action": "next"}}
+                else:
+                    self._send_media_key(176)
+                return {"success": True, "message": "Skipped to next track on Spotify.", "data": {"action": "next"}, "ui_action": "spotify_update"}
 
-                if sp and not self.api_premium_blocked:
-                    try:
-                        sp.next_track()
-                        return {"success": True, "message": "Skipped to next track via Web API.", "data": {"action": "next"}}
-                    except Exception:
-                        pass
-
-                if session:
-                    try:
-                        await session.try_skip_next_async()
-                        return {"success": True, "message": "Skipped to next track.", "data": {"action": "next"}, "ui_action": "spotify_update"}
-                    except Exception:
-                        pass
+            elif action == "previous":
+                if spotify_bridge.is_connected:
+                    await spotify_bridge.send_command("previous")
+                else:
+                    self._send_media_key(177)
+                return {"success": True, "message": "Returned to previous track on Spotify.", "data": {"action": "previous"}, "ui_action": "spotify_update"}
 
                 self._send_media_key(176)
                 return {
@@ -570,55 +555,31 @@ class SpotifyHubSkill(BaseSkill):
                 current_artist = "Ready"
                 is_playing = False
 
+                cached = self._get_cached_track()
+                if cached:
+                    current_title = cached.get("title", current_title)
+                    current_artist = cached.get("artist", current_artist)
+                    is_playing = (cached.get("status") == "playing")
+
                 if sp and not self.api_premium_blocked:
                     try:
-                        curr = sp.current_playback()
+                        def get_curr():
+                            return sp.current_playback()
+                        curr = await asyncio.wait_for(asyncio.to_thread(get_curr), timeout=0.8)
                         if curr and curr.get("item"):
                             item = curr["item"]
-                            current_title = item.get("name", "Unknown Track")
-                            current_artist = item["artists"][0]["name"] if item.get("artists") else "Spotify"
-                            is_playing = curr.get("is_playing", False)
-                            return {
-                                "success": True,
-                                "message": f"Media status: {current_title} by {current_artist}",
-                                "data": {
-                                    "is_running": True,
-                                    "api_connected": True,
-                                    "current_track": {
-                                        "title": current_title,
-                                        "artist": current_artist,
-                                        "status": "playing" if is_playing else "idle"
-                                    }
-                                },
-                                "ui_action": "spotify_update"
-                            }
+                            current_title = item.get("name", current_title)
+                            current_artist = item["artists"][0]["name"] if item.get("artists") else current_artist
+                            is_playing = curr.get("is_playing", is_playing)
                     except Exception as e:
                         if "403" in str(e) or "premium" in str(e).lower():
                             self.api_premium_blocked = True
-
-                if session:
-                    try:
-                        props = await session.try_get_media_properties_async()
-                        if props and props.title:
-                            current_title = props.title
-                            current_artist = props.artist or "Unknown Artist"
-                        info = session.get_playback_info()
-                        if info:
-                            is_playing = (info.playback_status == 4)
-                    except Exception:
-                        pass
-
-                if current_title == "Standby":
-                    cached = self._get_cached_track()
-                    if cached:
-                        current_title = cached.get("title", "Standby")
-                        current_artist = cached.get("artist", "Ready")
 
                 return {
                     "success": True,
                     "message": f"Media status: {current_title} by {current_artist}",
                     "data": {
-                        "is_running": bool(session),
+                        "is_running": True,
                         "api_connected": bool(sp),
                         "current_track": {
                             "title": current_title,

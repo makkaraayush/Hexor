@@ -110,14 +110,7 @@ class WakeListener:
         self.is_enabled = enabled
         if not enabled:
             self.conversation_until = 0.0
-            if self._active_stream:
-                try:
-                    self._active_stream.abort()
-                    self._active_stream.close()
-                except Exception:
-                    pass
-                self._active_stream = None
-            print("[WakeListener] Microphone hardware released and muted (Wake listener disabled).")
+            print("[WakeListener] Microphone hardware release requested (Wake listener disabled).")
         else:
             print("[WakeListener] Wake listener enabled.")
 
@@ -180,7 +173,7 @@ class WakeListener:
                     channels=1,
                     samplerate=self.sample_rate,
                     dtype='int16',
-                    blocksize=self.chunk_size
+                    blocksize=1024
                 )
                 self._active_stream = stream
                 with stream:
@@ -192,11 +185,11 @@ class WakeListener:
 
                     while self.is_running and self.is_enabled:
                         if time.time() < self.cooldown_until:
-                            time.sleep(0.05)
+                            time.sleep(0.04)
                             continue
 
                         try:
-                            data, _ = stream.read(self.chunk_size)
+                            data, _ = stream.read(1024)
                         except Exception:
                             break
                         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
@@ -206,7 +199,7 @@ class WakeListener:
                             if not is_speaking:
                                 is_speaking = True
                                 record_start = time.time()
-                                was_convo_at_start = (time.time() < self.conversation_until)
+                                was_convo_at_start = bool(self.conversation_until > 0.0 and time.time() < self.conversation_until)
                                 audio_buffer = []
                                 # Only broadcast user_speaking to HUD if actively in conversation mode
                                 if was_convo_at_start and self.broadcast_callback and self.loop:
@@ -236,7 +229,9 @@ class WakeListener:
                                 )
                             break
 
-                    if audio_buffer and is_speaking:
+                    self._active_stream = None
+
+                    if audio_buffer and is_speaking and self.is_enabled:
                         raw_bytes = b"".join(audio_buffer)
                         # Process if at least 0.3s of audio recorded
                         if len(raw_bytes) >= int(self.sample_rate * 2 * 0.3):
@@ -249,7 +244,7 @@ class WakeListener:
                                 )
 
             except Exception as e:
-                time.sleep(0.5)
+                time.sleep(0.2)
             finally:
                 self._active_stream = None
 
