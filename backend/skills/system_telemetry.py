@@ -21,13 +21,25 @@ class SystemTelemetrySkill(BaseSkill):
     def __init__(self):
         self._prev_net = psutil.net_io_counters()
         self._prev_time = time.time()
+        try:
+            psutil.cpu_percent(interval=None)
+        except Exception:
+            pass
 
     async def execute(self, action: str = "get_metrics", **kwargs) -> Dict[str, Any]:
         try:
             if action == "get_metrics":
                 cpu_percent = psutil.cpu_percent(interval=None)
                 mem = psutil.virtual_memory()
-                disk = psutil.disk_usage('/')
+                import os
+                try:
+                    drive = os.path.splitdrive(os.getcwd())[0] or "C:"
+                    disk = psutil.disk_usage(f"{drive}\\")
+                except Exception:
+                    try:
+                        disk = psutil.disk_usage("C:\\")
+                    except Exception:
+                        disk = psutil.disk_usage('/')
                 
                 now = time.time()
                 curr_net = psutil.net_io_counters()

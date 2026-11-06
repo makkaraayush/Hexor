@@ -2,7 +2,7 @@ import httpx
 import datetime
 from typing import Dict, Any, Optional
 from .base import BaseSkill
-from ..config import STORAGE_DIR
+from ..config import config, STORAGE_DIR
 
 class WeatherLocationSkill(BaseSkill):
     name = "weather_location"
@@ -52,12 +52,16 @@ class WeatherLocationSkill(BaseSkill):
     }
 
     def __init__(self):
+        default_city = config.DEFAULT_LOCATION or "Unknown"
+        default_lat = config.DEFAULT_LATITUDE if config.DEFAULT_LATITUDE != 0.0 else 28.6139
+        default_lon = config.DEFAULT_LONGITUDE if config.DEFAULT_LONGITUDE != 0.0 else 77.2090
+
         self.cached_location = {
-            "city": "Unknown",
-            "region": "",
-            "country": "",
-            "lat": 28.6139,
-            "lon": 77.2090
+            "city": default_city,
+            "region": "Haryana" if "haryana" in default_city.lower() else "",
+            "country": "India",
+            "lat": default_lat,
+            "lon": default_lon
         }
         self.last_weather = {}
 
@@ -68,8 +72,10 @@ class WeatherLocationSkill(BaseSkill):
             self.cached_location["city"] = city
 
     async def _resolve_ip_location(self) -> Dict[str, Any]:
+        if config.DEFAULT_LOCATION and config.DEFAULT_LATITUDE != 0.0:
+            return self.cached_location
         try:
-            async with httpx.AsyncClient(timeout=4.0) as client:
+            async with httpx.AsyncClient(verify=False, timeout=4.0) as client:
                 res = await client.get('http://ip-api.com/json/')
                 if res.status_code == 200:
                     data = res.json()
@@ -88,7 +94,7 @@ class WeatherLocationSkill(BaseSkill):
     async def _geocode_city(self, city: str) -> Optional[Dict[str, Any]]:
         try:
             url = f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1"
-            async with httpx.AsyncClient(timeout=5.0) as client:
+            async with httpx.AsyncClient(verify=False, timeout=5.0) as client:
                 res = await client.get(url)
                 if res.status_code == 200:
                     results = res.json().get("results", [])
@@ -153,7 +159,7 @@ class WeatherLocationSkill(BaseSkill):
                     f"latitude={lat}&longitude={lon}&current=temperature_2m,relative_humidity_2m,"
                     f"apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m&timezone=auto"
                 )
-                async with httpx.AsyncClient(timeout=6.0) as client:
+                async with httpx.AsyncClient(verify=False, timeout=6.0) as client:
                     res = await client.get(url)
                     if res.status_code == 200:
                         cur = res.json().get("current", {})

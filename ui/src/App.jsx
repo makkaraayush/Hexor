@@ -867,6 +867,9 @@ export default function App() {
         })
       });
       const data = await res.json();
+      if (data && data.data) {
+        setBambuData(prev => ({ ...prev, ...data.data }));
+      }
       if (data && data.message) {
         setMessages(prev => [...prev, {
           role: 'assistant',

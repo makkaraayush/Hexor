@@ -121,12 +121,26 @@ async def telemetry_broadcaster():
                 weather_skill = brain.skills.get("weather_location")
                 spotify_skill = brain.skills.get("spotify_hub")
                 
-                system_data = await telemetry_skill.execute(action="get_metrics") if telemetry_skill else {}
-                bambu_data = await bambu_skill.execute(action="get_status") if bambu_skill else {}
-                spotify_data = await spotify_skill.execute(action="status") if spotify_skill else {}
+                # Fetch system telemetry safely
+                try:
+                    system_data = await telemetry_skill.execute(action="get_metrics") if telemetry_skill else {}
+                except Exception:
+                    system_data = {}
+
+                # Fetch Bambu telemetry safely (fast cached)
+                try:
+                    bambu_data = bambu_skill.get_cached_telemetry() if (bambu_skill and hasattr(bambu_skill, "get_cached_telemetry")) else (await bambu_skill.execute(action="get_status") if bambu_skill else {})
+                except Exception:
+                    bambu_data = {}
+
+                # Fetch Spotify telemetry safely
+                try:
+                    spotify_data = await spotify_skill.execute(action="status") if spotify_skill else {}
+                except Exception:
+                    spotify_data = {}
                 
-                # Refresh weather every 60 iterations (~90 seconds)
-                if weather_skill and (weather_tick % 60 == 0 or not weather_skill.last_weather):
+                # Refresh weather every 60 iterations (~60 seconds)
+                if weather_skill and (weather_tick % 60 == 0 or not getattr(weather_skill, "last_weather", None)):
                     asyncio.create_task(weather_skill.execute(action="get_weather"))
                 weather_tick += 1
 
@@ -140,17 +154,17 @@ async def telemetry_broadcaster():
                 }
 
                 dead_connections = set()
-                for ws in active_connections:
+                for ws in list(active_connections):
                     try:
                         await ws.send_text(json.dumps(packet))
                     except Exception:
                         dead_connections.add(ws)
                 for dead in dead_connections:
-                    active_connections.remove(dead)
-        except Exception:
+                    active_connections.discard(dead)
+        except Exception as e:
             pass
 
-        await asyncio.sleep(1.5)
+        await asyncio.sleep(1.0)
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):

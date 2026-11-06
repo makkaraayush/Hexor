@@ -121,10 +121,13 @@ class WakeListener:
         else:
             print("[WakeListener] Wake listener enabled.")
 
-    def notify_hexor_speaking(self, duration_seconds: float):
+    def notify_hexor_speaking(self, duration_seconds: float, extend_conversation: bool = True):
         self.cooldown_until = time.time() + duration_seconds + 0.2
-        # Ensure the 25-second conversation timeout only starts AFTER Hexor finishes speaking!
-        self.conversation_until = self.cooldown_until + 25.0
+        if extend_conversation:
+            # Ensure the 25-second conversation timeout only starts AFTER Hexor finishes speaking!
+            self.conversation_until = self.cooldown_until + 25.0
+        else:
+            self.conversation_until = 0.0
 
     def _get_best_input_device(self) -> Optional[int]:
         try:
@@ -272,7 +275,7 @@ class WakeListener:
             if is_convo_active and re.search(dismiss_regex, words_only):
                 self.conversation_until = 0.0
                 dismissal = f"Standing by, {config.USER_TITLE}."
-                self.notify_hexor_speaking(1.0)
+                self.notify_hexor_speaking(1.0, extend_conversation=False)
                 if self.loop:
                     asyncio.run_coroutine_threadsafe(
                         self._dispatch_dismissal(dismissal),

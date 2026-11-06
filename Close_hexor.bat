@@ -21,3 +21,4 @@ for /f "tokens=5" %%a in ('netstat -aon ^| findstr ":8000" ^| findstr "LISTENING
 echo Hexor has been completely stopped and all ports released.
 timeout /t 1 /nobreak >nul
 exit
+

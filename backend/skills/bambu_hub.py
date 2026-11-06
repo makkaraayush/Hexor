@@ -61,7 +61,7 @@ class BambuHubSkill(BaseSkill):
             "total_layers": 0,
             "speed_level": "standard",
             "fan_speed": 0,
-            "light_on": True,
+            "light_on": False,
             "model_name": "Standby",
             "lan_ip": self.lan_ip,
             "serial": self.serial
@@ -91,13 +91,31 @@ class BambuHubSkill(BaseSkill):
     def _init_mqtt(self):
         if not mqtt or not self.lan_ip or not self.serial or not self.access_code:
             return
+        if self._mqtt_client:
+            try:
+                self._mqtt_client.loop_stop()
+                self._mqtt_client.disconnect()
+            except Exception:
+                pass
+            self._mqtt_client = None
+
         try:
-            client = mqtt.Client(client_id=f"hexor_{int(time.time())}", protocol=mqtt.MQTTv311)
+            if hasattr(mqtt, "CallbackAPIVersion"):
+                client = mqtt.Client(
+                    mqtt.CallbackAPIVersion.VERSION1,
+                    client_id=f"hexor_{int(time.time())}",
+                    protocol=mqtt.MQTTv311
+                )
+            else:
+                client = mqtt.Client(
+                    client_id=f"hexor_{int(time.time())}",
+                    protocol=mqtt.MQTTv311
+                )
             client.username_pw_set("bblp", self.access_code)
             client.tls_set(cert_reqs=ssl.CERT_NONE)
             client.tls_insecure_set(True)
 
-            def on_connect(c, userdata, flags, rc):
+            def on_connect(c, userdata, flags, rc, *args):
                 if rc == 0:
                     self._telemetry["connected"] = True
                     c.subscribe(f"device/{self.serial}/report")
@@ -113,7 +131,7 @@ class BambuHubSkill(BaseSkill):
                 except Exception:
                     pass
 
-            def on_disconnect(c, userdata, rc):
+            def on_disconnect(c, userdata, rc, *args):
                 self._telemetry["connected"] = False
 
             client.on_connect = on_connect
@@ -123,8 +141,8 @@ class BambuHubSkill(BaseSkill):
             client.connect_async(self.lan_ip, 8883, keepalive=60)
             client.loop_start()
             self._mqtt_client = client
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[BambuHub] MQTT Init Error: {e}")
 
     def _update_from_report(self, data: dict):
         self._telemetry["connected"] = True
@@ -170,14 +188,24 @@ class BambuHubSkill(BaseSkill):
                     self._telemetry["light_on"] = (l.get("mode") == "on")
 
     def _send_bambu_command(self, cmd_dict: dict) -> bool:
-        if self._mqtt_client:
+        if not self._mqtt_client or not self._telemetry.get("connected"):
+            self._init_mqtt()
+            time.sleep(0.3)
+        if self._mqtt_client and self.serial:
             try:
                 topic = f"device/{self.serial}/request"
-                self._mqtt_client.publish(topic, json.dumps(cmd_dict))
-                return True
-            except Exception:
-                pass
+                res = self._mqtt_client.publish(topic, json.dumps(cmd_dict), qos=1)
+                return res.rc == 0
+            except Exception as e:
+                print(f"[BambuHub] Publish error: {e}")
         return False
+
+    def get_cached_telemetry(self) -> Dict[str, Any]:
+        return {
+            "success": True,
+            "message": f"Bambu status: {self._telemetry['state']}",
+            "data": self._telemetry
+        }
 
     def _load_state(self):
         if self.state_file.exists():
@@ -213,12 +241,6 @@ class BambuHubSkill(BaseSkill):
                 return await self._dispatch_approved_print()
 
             elif action == "get_status":
-                if not self._telemetry.get("connected") or self._telemetry.get("nozzle_temp", 0) == 0:
-                    for _ in range(6):
-                        if self._telemetry.get("connected") and self._telemetry.get("nozzle_temp", 0) > 0:
-                            break
-                        await asyncio.sleep(0.3)
-
                 if self._telemetry["state"] == "PRINTING":
                     msg = (
                         f"Bambu Lab A1 is currently printing '{self._telemetry['model_name']}' at "
@@ -244,34 +266,51 @@ class BambuHubSkill(BaseSkill):
                 }
 
             elif action == "pause_print":
-                self._send_bambu_command({"print": {"sequence_id": "0", "command": "pause"}})
+                seq = str(int(time.time() * 1000) % 100000)
+                self._send_bambu_command({"print": {"sequence_id": seq, "command": "pause"}})
                 self._telemetry["state"] = "PAUSED"
                 return {"success": True, "message": "Bambu A1 print paused via MQTT.", "data": self._telemetry}
 
             elif action == "resume_print":
-                self._send_bambu_command({"print": {"sequence_id": "0", "command": "resume"}})
+                seq = str(int(time.time() * 1000) % 100000)
+                self._send_bambu_command({"print": {"sequence_id": seq, "command": "resume"}})
                 self._telemetry["state"] = "PRINTING"
                 return {"success": True, "message": "Bambu A1 print resumed via MQTT.", "data": self._telemetry}
 
             elif action == "stop_print":
-                self._send_bambu_command({"print": {"sequence_id": "0", "command": "stop"}})
+                seq = str(int(time.time() * 1000) % 100000)
+                self._send_bambu_command({"print": {"sequence_id": seq, "command": "stop"}})
                 self._telemetry["state"] = "IDLE"
                 return {"success": True, "message": "Bambu A1 print canceled via MQTT.", "data": self._telemetry}
 
             elif action == "set_speed":
                 spd_map = {"silent": 1, "standard": 2, "sport": 3, "ludicrous": 4}
                 lvl = spd_map.get(speed_level.lower(), 2)
-                self._send_bambu_command({"print": {"sequence_id": "0", "command": "print_speed", "param": str(lvl)}})
+                seq = str(int(time.time() * 1000) % 100000)
+                self._send_bambu_command({"print": {"sequence_id": seq, "command": "print_speed", "param": str(lvl)}})
                 self._telemetry["speed_level"] = speed_level
                 return {"success": True, "message": f"Bambu A1 speed set to {speed_level}.", "data": self._telemetry}
 
             elif action == "toggle_light":
-                new_state = not self._telemetry["light_on"]
+                new_state = not self._telemetry.get("light_on", False)
                 mode_str = "on" if new_state else "off"
-                self._send_bambu_command({"system": {"sequence_id": "0", "command": "ledctrl", "led_node": "chamber_light", "led_mode": mode_str}})
+                seq = str(int(time.time() * 1000) % 100000)
+                cmd = {
+                    "system": {
+                        "sequence_id": seq,
+                        "command": "ledctrl",
+                        "led_node": "chamber_light",
+                        "led_mode": mode_str,
+                        "led_on_time": 500,
+                        "led_off_time": 500,
+                        "loop_times": 0,
+                        "interval_time": 0
+                    }
+                }
+                sent = self._send_bambu_command(cmd)
                 self._telemetry["light_on"] = new_state
                 state_str = "ON" if new_state else "OFF"
-                return {"success": True, "message": f"Chamber light toggled {state_str}.", "data": self._telemetry}
+                return {"success": sent, "message": f"Chamber light turned {state_str}.", "data": self._telemetry, "ui_action": "bambu_telemetry_update"}
 
             return {"success": False, "message": f"Unsupported Bambu action: {action}", "data": None}
 

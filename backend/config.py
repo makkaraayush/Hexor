@@ -45,4 +45,8 @@ class Config:
     ASSISTANT_NAME = "Hexor"
     USER_TITLE = os.getenv("USER_TITLE", "Sir")
 
+    DEFAULT_LOCATION = os.getenv("DEFAULT_LOCATION", "")
+    DEFAULT_LATITUDE = float(os.getenv("DEFAULT_LATITUDE", "0")) if os.getenv("DEFAULT_LATITUDE") else 0.0
+    DEFAULT_LONGITUDE = float(os.getenv("DEFAULT_LONGITUDE", "0")) if os.getenv("DEFAULT_LONGITUDE") else 0.0
+
 config = Config()
