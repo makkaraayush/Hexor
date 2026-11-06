@@ -33,7 +33,7 @@ export default function App() {
   const [skills, setSkills] = useState([]);
   
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [isListening, setIsListening] = useState(false);
+  const [isListening, setIsListening] = useState(true);
   const [interimTranscript, setInterimTranscript] = useState('');
   const [isProcessing, setIsProcessing] = useState(false);
   const [voiceEnabled, setVoiceEnabled] = useState(true);
@@ -58,7 +58,7 @@ export default function App() {
   const recognitionRef = useRef(null);
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
-  const isListeningRef = useRef(false);
+  const isListeningRef = useRef(true);
   const isSpeakingRef = useRef(false);
   const wasInConvoBeforeSpeakingRef = useRef(false);
   const userSpeakingTimeoutRef = useRef(null);
@@ -201,37 +201,38 @@ export default function App() {
   useEffect(() => {
     const detectDevices = async () => {
       try {
-        const tempStream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => null);
-        if (tempStream) {
-          tempStream.getTracks().forEach(track => track.stop());
-        }
-        const devices = await navigator.mediaDevices.enumerateDevices();
+        if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+        const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
         const inputs = devices.filter(d => d.kind === 'audioinput');
         const outputs = devices.filter(d => d.kind === 'audiooutput');
 
         if (!selectedMicId) {
           const redgear = inputs.find(d => 
-            d.label.toLowerCase().includes('redgear') || 
-            d.label.toLowerCase().includes('shadow vox')
+            d.label && (
+              d.label.toLowerCase().includes('redgear') || 
+              d.label.toLowerCase().includes('shadow vox')
+            )
           );
           const chosenMic = redgear || inputs[0];
-          if (chosenMic) {
+          if (chosenMic && chosenMic.deviceId) {
             setSelectedMicId(chosenMic.deviceId);
-            setActiveMicLabel(chosenMic.label);
+            setActiveMicLabel(chosenMic.label || 'Default Microphone');
             localStorage.setItem('hexor_mic_id', chosenMic.deviceId);
           }
         } else {
           const curr = inputs.find(d => d.deviceId === selectedMicId);
-          if (curr) setActiveMicLabel(curr.label);
+          if (curr && curr.label) setActiveMicLabel(curr.label);
         }
 
         if (!selectedSpeakerId) {
           const dell = outputs.find(d => 
-            d.label.toLowerCase().includes('dell') || 
-            d.label.toLowerCase().includes('s234')
+            d.label && (
+              d.label.toLowerCase().includes('dell') || 
+              d.label.toLowerCase().includes('s234')
+            )
           );
           const chosenSpk = dell || outputs[0];
-          if (chosenSpk) {
+          if (chosenSpk && chosenSpk.deviceId) {
             setSelectedSpeakerId(chosenSpk.deviceId);
             localStorage.setItem('hexor_speaker_id', chosenSpk.deviceId);
           }
@@ -338,11 +339,21 @@ export default function App() {
     connectWs();
     fetchSkills();
     fetchSpotify();
+    fetchWeather();
+    fetchTelemetry();
+    fetchBambu();
 
-    const spotifyInterval = setInterval(fetchSpotify, 2500);
+    const pollInterval = setInterval(() => {
+      fetchSpotify();
+      fetchTelemetry();
+      fetchBambu();
+    }, 2500);
+
+    const weatherInterval = setInterval(fetchWeather, 30000);
 
     return () => {
-      clearInterval(spotifyInterval);
+      clearInterval(pollInterval);
+      clearInterval(weatherInterval);
       if (wsRef.current) wsRef.current.close();
     };
   }, []);
@@ -578,29 +589,11 @@ export default function App() {
     };
   }, []);
 
-  // Ensure voice listener engages on first user click if browser policy required interaction
-  useEffect(() => {
-    const handleFirstGesture = async () => {
-      try {
-        if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-          const stream = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => null);
-          if (stream) {
-            // Immediately stop audio tracks so browser does NOT hold the microphone open!
-            stream.getTracks().forEach(track => track.stop());
-          }
-        }
-      } catch (e) {}
-    };
-    window.addEventListener('click', handleFirstGesture, { once: true });
-    window.addEventListener('keydown', handleFirstGesture, { once: true });
-    return () => {
-      window.removeEventListener('click', handleFirstGesture);
-      window.removeEventListener('keydown', handleFirstGesture);
-    };
-  }, []);
-
   const toggleListening = async () => {
-    if (isListeningRef.current) {
+    const nextState = !isListening;
+    setIsListening(nextState);
+    isListeningRef.current = nextState;
+    if (!nextState) {
       stopWebSpeech();
       try {
         await fetch('/api/voice/wake_listener', {
@@ -619,6 +612,38 @@ export default function App() {
         });
       } catch (e) {}
     }
+  };
+
+  const fetchWeather = async () => {
+    try {
+      const res = await fetch('/api/weather');
+      const data = await res.json();
+      if (data.weather && data.weather.location) {
+        setWeatherData(data.weather);
+      } else if (data.location && data.location.city && data.location.city !== "Unknown") {
+        setWeatherData(prev => ({
+          ...prev,
+          location: data.location.city
+        }));
+      }
+    } catch (e) {}
+  };
+
+  const fetchTelemetry = async () => {
+    try {
+      const res = await fetch('/api/telemetry');
+      const data = await res.json();
+      if (data.data) setTelemetry(data.data);
+    } catch (e) {}
+  };
+
+  const fetchBambu = async () => {
+    try {
+      const res = await fetch('/api/bambu/status');
+      const data = await res.json();
+      if (data.data) setBambuData(data.data);
+      if (data.pending_approval !== undefined) setPendingApproval(data.pending_approval);
+    } catch (e) {}
   };
 
   const fetchSkills = async () => {

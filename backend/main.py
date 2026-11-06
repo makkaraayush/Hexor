@@ -231,6 +231,17 @@ async def update_location_endpoint(req: LocationRequest):
         return {"success": True, "location": skill.cached_location, "weather": weather_res.get("data")}
     return {"success": False}
 
+@app.get("/api/weather")
+async def get_weather_endpoint():
+    skill = brain.skills.get("weather_location")
+    if skill:
+        weather = getattr(skill, "last_weather", None)
+        if not weather or not weather.get("location"):
+            res = await skill.execute(action="get_weather")
+            weather = res.get("data") or skill.last_weather
+        return {"success": True, "weather": weather, "location": skill.cached_location}
+    return {"success": False}
+
 from .skills.spotify_bridge import spotify_bridge
 
 @app.websocket("/api/spotify/bridge")
@@ -344,6 +355,17 @@ async def shutdown_system():
                 pass
 
             curr_pid = os.getpid()
+
+            # Also terminate parent command shell if launched via dedicated console/cmd
+            try:
+                p = psutil.Process(curr_pid)
+                parent = p.parent()
+                if parent:
+                    pname = parent.name().lower()
+                    if any(shell in pname for shell in ["cmd.exe", "cmd", "powershell.exe", "pwsh.exe", "conhost.exe"]):
+                        parent.kill()
+            except Exception:
+                pass
 
             # Launch detached watchdog to kill the dedicated terminal window, run Close_hexor.bat, and free ports
             close_bat = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "Close_hexor.bat")
@@ -603,9 +625,16 @@ if ui_dist.exists():
     @app.get("/{full_path:path}")
     async def serve_frontend(full_path: str):
         target_file = ui_dist / full_path
-        if target_file.exists() and target_file.is_file():
+        if target_file.exists() and target_file.is_file() and full_path != "":
             return FileResponse(str(target_file))
-        return FileResponse(str(ui_dist / "index.html"))
+        return FileResponse(
+            str(ui_dist / "index.html"),
+            headers={
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                "Pragma": "no-cache",
+                "Expires": "0"
+            }
+        )
 
 if __name__ == "__main__":
     import uvicorn

@@ -64,8 +64,7 @@ export default function SettingsModal({
 
   const loadAudioDevices = async () => {
     try {
-      await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => {});
-      const devices = await navigator.mediaDevices.enumerateDevices();
+      const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
       
       const inputs = devices.filter(d => d.kind === 'audioinput');
       const outputs = devices.filter(d => d.kind === 'audiooutput');

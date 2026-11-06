@@ -266,16 +266,18 @@ class WakeListener:
 
             transcript_clean = text.strip().lower()
             words_only = re.sub(r'[^\w\s]', '', transcript_clean)
-            is_convo_active = was_convo_at_start or (time.time() < self.conversation_until)
+            is_convo_active = bool(self.conversation_until > 0.0 and time.time() < self.conversation_until)
 
             print(f"[WakeListener Mic] Heard: '{text}' (Active Convo: {is_convo_active})")
 
             # 1. Explicit dismissal in active conversation (NEVER dismiss on "sleep", "good night", or "thank you")
             dismiss_regex = r'\b(?:stand\s*down|stop\s*listening|dismissed|hexor\s*stand\s*down|jarvis\s*stand\s*down|shut\s*up|stop\s*talking|exit\s*conversation)\b'
             if is_convo_active and re.search(dismiss_regex, words_only):
+                self.enter_standby()
                 self.conversation_until = 0.0
                 dismissal = f"Standing by, {config.USER_TITLE}."
                 self.notify_hexor_speaking(1.0, extend_conversation=False)
+                self.conversation_until = 0.0
                 if self.loop:
                     asyncio.run_coroutine_threadsafe(
                         self._dispatch_dismissal(dismissal),
