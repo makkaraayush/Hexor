@@ -91,10 +91,17 @@ class BambuHubSkill(BaseSkill):
     def _init_mqtt(self):
         if not mqtt or not self.lan_ip or not self.serial or not self.access_code:
             return
+        now = time.time()
+        if hasattr(self, "_last_mqtt_attempt") and (now - self._last_mqtt_attempt < 8.0):
+            return
+        self._last_mqtt_attempt = now
+
         if self._mqtt_client:
             try:
-                self._mqtt_client.loop_stop()
-                self._mqtt_client.disconnect()
+                old_client = self._mqtt_client
+                self._mqtt_client = None
+                old_client.loop_stop()
+                old_client.disconnect()
             except Exception:
                 pass
             self._mqtt_client = None

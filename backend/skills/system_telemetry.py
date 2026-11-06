@@ -21,15 +21,27 @@ class SystemTelemetrySkill(BaseSkill):
     def __init__(self):
         self._prev_net = psutil.net_io_counters()
         self._prev_time = time.time()
+        self._last_cpu_time = 0.0
+        self._cached_cpu = 0.0
         try:
-            psutil.cpu_percent(interval=None)
+            self._cached_cpu = psutil.cpu_percent(interval=None)
+            self._last_cpu_time = time.time()
         except Exception:
             pass
 
     async def execute(self, action: str = "get_metrics", **kwargs) -> Dict[str, Any]:
         try:
             if action == "get_metrics":
-                cpu_percent = psutil.cpu_percent(interval=None)
+                now = time.time()
+                # Rate-limit psutil.cpu_percent queries to minimum 0.8s interval.
+                # Microsecond calls between WS broadcaster and REST poll cause psutil to calculate false 100.0% spikes.
+                if now - self._last_cpu_time >= 0.8:
+                    try:
+                        self._cached_cpu = psutil.cpu_percent(interval=None)
+                        self._last_cpu_time = now
+                    except Exception:
+                        pass
+                cpu_percent = self._cached_cpu
                 mem = psutil.virtual_memory()
                 import os
                 try:

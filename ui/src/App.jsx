@@ -31,6 +31,7 @@ export default function App() {
     condition: "Clear"
   });
   const [skills, setSkills] = useState([]);
+  const [isCoreConnected, setIsCoreConnected] = useState(true);
   
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isListening, setIsListening] = useState(true);
@@ -282,14 +283,24 @@ export default function App() {
         const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
+        ws.onopen = () => {
+          setIsCoreConnected(true);
+          fetchSkills();
+          fetchSpotify();
+          fetchWeather();
+          fetchTelemetry();
+          fetchBambu();
+        };
+
         ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data);
             if (data.type === "hud_telemetry") {
-              if (data.system) setTelemetry(data.system);
-              if (data.bambu) setBambuData(data.bambu);
+              setIsCoreConnected(true);
+              if (data.system && Object.keys(data.system).length > 0) setTelemetry(data.system);
+              if (data.bambu && Object.keys(data.bambu).length > 0) setBambuData(data.bambu);
               if (data.weather && data.weather.location) setWeatherData(data.weather);
-              if (data.spotify) setSpotifyData(data.spotify);
+              if (data.spotify && Object.keys(data.spotify).length > 0) setSpotifyData(data.spotify);
               if (data.pending_approval !== undefined) setPendingApproval(data.pending_approval);
             } else if (data.type === "spotify_update" && data.data) {
               setSpotifyData(data.data);
@@ -337,11 +348,13 @@ export default function App() {
         };
 
         ws.onclose = () => {
+          setIsCoreConnected(false);
           setTimeout(() => {
             if (connectWsRef.current) connectWsRef.current();
-          }, 3000);
+          }, 2000);
         };
         ws.onerror = () => {
+          setIsCoreConnected(false);
           try { ws.close(); } catch (e) {}
         };
       } catch (e) {}
@@ -1033,6 +1046,13 @@ export default function App() {
               <span>HEXOR</span>
               <span className="text-[10px] px-1.5 py-0.2 bg-cyan-500/20 border border-cyan-400/40 rounded text-cyan-300">
                 120B NEURAL
+              </span>
+              <span className={`text-[10px] px-1.5 py-0.2 rounded border font-semibold ${
+                isCoreConnected 
+                  ? 'bg-emerald-500/20 border-emerald-400/40 text-emerald-300' 
+                  : 'bg-red-500/20 border-red-400/40 text-red-300 animate-pulse'
+              }`}>
+                {isCoreConnected ? 'ONLINE' : 'CONNECTING...'}
               </span>
             </div>
             <div className="font-mono-tech text-[10px] text-cyan-500 tracking-wider">

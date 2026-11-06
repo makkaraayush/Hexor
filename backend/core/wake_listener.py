@@ -79,9 +79,9 @@ class WakeListener:
 
         _kill_sapisvr()
         self.loop = loop
+        self.is_running = True
         if self.thread and self.thread.is_alive():
             return
-        self.is_running = True
         self.thread = threading.Thread(target=self._mic_listen_loop, daemon=True)
         self.thread.start()
         print("[WakeListener] Zero-token OS-level microphone listener active.")
@@ -100,30 +100,15 @@ class WakeListener:
 
     def stop(self):
         self.is_running = False
-        if self._active_stream:
-            try:
-                self._active_stream.abort()
-                self._active_stream.close()
-            except Exception:
-                pass
-            self._active_stream = None
+        self.is_enabled = False
 
     def set_enabled(self, enabled: bool):
         self.is_enabled = enabled
+        self.conversation_until = 0.0
         if not enabled:
-            self.conversation_until = 0.0
-            # Fully stop thread so mic hardware is released at OS level
-            self.is_running = False
-            if self._active_stream:
-                try:
-                    self._active_stream.abort()
-                    self._active_stream.close()
-                except Exception:
-                    pass
-                self._active_stream = None
-            print("[WakeListener] Microphone FULLY released. Wake listener stopped.")
+            print("[WakeListener] Microphone hardware release requested (Wake listener disabled).")
         else:
-            # Restart thread if disabled previously
+            # Ensure background thread is running
             if self.loop and (not self.thread or not self.thread.is_alive()):
                 self.start(self.loop)
             print("[WakeListener] Wake listener enabled.")
